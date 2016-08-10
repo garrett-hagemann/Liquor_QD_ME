@@ -1,4 +1,4 @@
-using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots
+using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Interpolations
 
 df = readtable("../../demand_estimation/berry_logit/berry_logit.csv")
 char_list = [:price, :d_gin, :d_vod, :d_rum, :d_sch, :d_brb, :d_whs, :holiday]
@@ -50,6 +50,7 @@ for market in markets
 
 		# flag that determines if product has matched price data
 		matched_upc = (df[prod_bool, :_merge_purchases][1] == 3)
+		M = df[prod_bool,:M][1]
 
 		if matched_upc == true # Only need to work with matched products. No price sched for non-matched.
 			println("Product has matched price data. Evaluating cutoff prices.")
@@ -89,15 +90,20 @@ for market in markets
 			#Defining p-star function. Requires solving NL equation
 			function p_star(rho,lambda)
 				g(p) =  (p - rho - lambda)*d_share(p) + share(p)
-				res = fzero(g,5.0,order=8) # upper bound here can be finicky
+				res = fzero(g,5,order=8) # upper bound here can be finicky
 				return res
 			end
+
+			# interpolating p_star to avoid the messy root finding during solution
+			p_star_grid = [p_star(rho,lambda) for rho = 1:100, lambda = 1:100]
+			p_star_grid = convert(Array{Float64,2},p_star_grid)
+			p_star_itp = interpolate(p_star_grid,BSpline(Quadratic(Line())),OnGrid())
 		
 			# Derivative of the p_star function. Need to use central difference approx
 			# because auto diff doesn't with with fzero
-			eps = 1e-12
+			eps = 1e-14
 			function d_pstar_d_rho(rho,lambda)
-				res = (p_star(rho + eps,lambda) - p_star(rho - eps,lambda)) / (2*eps)
+				res = (p_star_itp(rho + eps,lambda) - p_star_itp(rho - eps,lambda)) / (2*eps)
 				return res
 			end
 			d_pstar_d_rho(rho,lambda) = 1
@@ -121,22 +127,21 @@ for market in markets
 				rho_vec = theta[1:n]
 				
 				for i in 1:length(rho_vec)
-					f(l) =  ((rho_vec[i] - c)*d_share(p_star(rho_vec[i],l))*d_pstar_d_rho(rho_vec[i],l) + share(p_star(rho_vec[i],l)))*pdf(l)
-					wfocs_vec[i] = quadgk(f,lambda_vec[i], lambda_vec[i+1])[1]
+					f(l) =  ((rho_vec[i] - c)*d_share(p_star_itp[rho_vec[i],l])*d_pstar_d_rho(rho_vec[i],l) + share(p_star_itp[rho_vec[i],l]))*pdf(l)
+					wfocs_vec[i] = quadgk(f,big(lambda_vec[i]), big(lambda_vec[i+1]); abstol= 1e-16)[1]
 				end
 
 				for i in 1:(nfocs-2) # indexing is inclusive so x:x = x for any x
-					wfocs_vec[i + length(rho_vec)] = share(p_star(rho_vec[i],lambda_vec[i+1]))*(p_star(rho_vec[i],lambda_vec[i+1]) - lambda_vec[i+1] - c) - share(p_star(rho_vec[i+1], lambda_vec[i+1]))*(p_star(rho_vec[i+1],lambda_vec[i+1]) - rho_vec[i+1] - lambda_vec[i+1] + rho_vec[i] - c)
+					wfocs_vec[i + length(rho_vec)] = share(p_star_itp[rho_vec[i],lambda_vec[i+1]])*(p_star_itp[rho_vec[i],lambda_vec[i+1]] - lambda_vec[i+1] - c) - share(p_star_itp[rho_vec[i+1], lambda_vec[i+1]])*(p_star_itp[rho_vec[i+1],lambda_vec[i+1]] - rho_vec[i+1] - lambda_vec[i+1] + rho_vec[i] - c)
 				end
 				toc()
 			end 
-			println(p_star(10.0,6.0))	
-			test = [0.0;9.0;0.0]
-			wfocs!([30.0;11.0;2.0],test)
-			println(test)
-			#x0 = [40.0,16.0,.250] # "random" starting points
-			#test = nlsolve(wfocs!,x0,method = :trust_region, show_trace = true, ftol = 1e-12)
+			#test = [0.0;9.0;0.0]
+			#wfocs!([30.0;11.0;2.0],test)
 			#println(test)
+			x0 = [30.0,15.0,2.0] # "random" starting points
+			test = nlsolve(wfocs!, x0,method=:newton, show_trace = true, ftol = 1e-12)
+			println(test)
 
 	
 

@@ -1,4 +1,4 @@
-using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Interpolations, JuMP, NLopt
+using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, NLopt, Distributions
 
 df = readtable("../../demand_estimation/berry_logit/berry_logit.csv")
 char_list = [:price, :d_gin, :d_vod, :d_rum, :d_sch, :d_brb, :d_whs, :holiday]
@@ -27,9 +27,6 @@ end
 function burr_cdf(x,gamma)
 	return 1 - (1-x)^(1/gamma)
 end
-burr_cdf1(x) = burr_cdf(x,.1)
-
-burr_pdf(x) = ForwardDiff.derivative(burr_cdf1,x)
 
 function sparse_int(f::Function, a::Number, b::Number)
 	#= Implements sparse grid quadrature from sparsegrids.de
@@ -54,7 +51,6 @@ end
 lambda_lb = 0
 lambda_ub = 1
 
-max_mc = 20
 
 
 #markets = convert(Vector
@@ -65,11 +61,12 @@ for market in markets
 	products = [650]
 	
 	for product in products
-		# defning params for wholesaler
-		#pdf(x) = weibull_pdf(x,1,0,1)
-		#pdf(x) = unif_pdf(x)
-		pdf(x) = burr_pdf(x)
-		c = 10
+		# defning params for wholesaler problem
+		c = 10 # marginal cost for wholesaler
+		max_mc = 20 # max MC for retailer. Scales type parameter
+		a = 1 # first param for Beta distribution
+		b = 1 # second param for Beta distribution
+		
 		println("Working with Market: $market, Product: $product")
 
 		# defining selection boolians so that we can select appropriate products/markets
@@ -81,7 +78,6 @@ for market in markets
 
 		# flag that determines if product has matched price data
 		matched_upc = (df[prod_bool, :_merge_purchases][1] == 3)
-		M = df[prod_bool,:M][1]
 
 		if matched_upc == true # Only need to work with matched products. No price sched for non-matched.
 			println("Product has matched price data. Evaluating cutoff prices.")
@@ -97,6 +93,32 @@ for market in markets
 			#Grabbing market size. Needs to be the same as that used to estimate shares
 			M = df[prod_bool,:M][1]
 			prod_price = df[prod_bool, :price][1]
+
+			# lists of observed prices and quantities. Need these to calculate error using 
+			# estimated price schedule 
+			rho_list = [:actual_p0, :actual_p1, :actual_p2, :actual_p3, :actual_p4, :actual_p5, :actual_p6,
+				:actual_p7, :actual_p8, :actual_p9, :actual_p10]
+
+			cutoff_q_list = [:disc_q0, :disc_q1, :disc_q2, :disc_q3, :disc_q4, :disc_q5, :disc_q6,
+				:disc_q7, :disc_q8, :disc_q9, :disc_q10]
+
+			obs_rhos = dropna(convert(DataArray,df[prod_bool, rho_list])'[:,1]) #some goofy conversion to make the dropna work as expected
+			obs_cutoff_q = dropna(convert(DataArray,df[prod_bool, cutoff_q_list])'[:,1]) #same as above
+			obs_ff = [0.0] # first fixed fee is by definition 0
+
+			
+			#= calculating series of A (intercepts of piecewise linear price schedules
+			The convention is that rho[k] is associated with quantities between cutoff_q[k-1]
+			and cutoff_q[k] where cutoff_q[0] = 0 (i.e. rho[1] is for all quantities up to
+			cutoff_q[1] and rho[2] 	is for quantities between cuttoff_q[1] and cutoff_q[2] =#
+			for k in 2:length(obs_rhos) #mismatch between the indexing. take care
+				y_intersect = obs_rhos[k-1]*obs_cutoff_q[k] # what would price be if you bought at previous unit price?
+				intercept = y_intersect - obs_rhos[k]*obs_cutoff_q[k] # where does current unit price interesct vertical axis?
+				push!(obs_ff,intercept) # append to list obs_ff
+			end
+			println(obs_rhos)
+			println(obs_cutoff_q)
+			println(obs_ff)
 
 			#Defining share function which is ONLY a function of price
 			function share(p)
@@ -117,85 +139,113 @@ for market in markets
 			#Derivatives of the share fuction
 			d_share(p) = ForwardDiff.derivative(share, p)
 			dd_share(p) = ForwardDiff.derivative(d_share,p)
-	
-			#Defining p-star function. Requires solving NL equation
-			function p_star(rho::Number,lambda::Number)
-				g(p) =  (p - rho - lambda*max_mc)*d_share(p) + share(p)
-				res = fzero(g,(rho+lambda*max_mc)) # upper bound here can be finicky
-				return res
-			end
 
-			# interpolating p_star to avoid the messy root finding during solution
-			p_star_grid = [p_star(rho,lambda) for rho = 1:100, lambda = 1:100]
-			p_star_grid = convert(Array{Float64,2},p_star_grid)
-			p_star_itp = interpolate(p_star_grid,BSpline(Quadratic(Line())),OnGrid())
-		
-			# Derivative of the p_star function. Need to use central difference approx
-			# because auto diff doesn't with with fzero
-			eps = 1e-16
-			function d_pstar_d_rho(rho,lambda)
-				res = (p_star(rho + eps,lambda) - p_star(rho - eps,lambda)) / (2*eps)
-				return res
-			end
-			d_pstar_d_rho(rho,lambda) = 1
+			function price_sched_calc(params,N)
+				# params are the params of the wholesaler's problem we're trying to
+				# estimate. 
 
-			#=function d_pstar_d_rho(rho,lambda)
-				res = d_share(p_star(rho,lambda)) / (dd_share(p_star(rho,lambda))*(p_star(rho,lambda) - rho - lambda*max_mc) + 2*d_share(p_star(rho,lambda)))
-				return res
-			end=#
+				# Function returns the coefficients defining the price schedule as [rho, lambda]
+				# where rho is n long and lambda is n-1 long for an n option schedule
 
-			
-			# *****CODE THAT USES NLSOLVE*****
+				c = params[1] # marginal cost for wholesaler
+				max_mc = params[2] # max MC for retailer. Scales type parameter
+				a = params[3] # first param for Beta distribution
+				b = params[4] # second param for Beta distribution
+				est_pdf(x) = pdf(Beta(a,b),x)
 
-			# Defining Wholesaler FOCs which can then be solved. Following the syntax to use
-			# NLsovle package.
-			# NOTE: Can refomulate as constrained minimization if this doesn't work
+				#Defining p-star function. Requires solving NL equation
+				function p_star(rho::Number,lambda::Number)
+					g(p) =  (p - rho - lambda*max_mc)*d_share(p) + share(p)
+					res = fzero(g,(rho+lambda*max_mc)) # upper bound here can be finicky
+					return res
+				end
 
-			function wfocs!(theta::Vector, wfocs_vec)
-				tic()
-				nfocs = length(theta) # number of FOCs (last param is wholesaler cost)
-				n = round(Int,(nfocs + 1)/2) # figuring out how many parts the price schedule has
-				#println("Solving for $n part price schedule")
-								
-				lambda_vec = [lambda_lb ; theta[n+1:end] ; lambda_ub]
-				rho_vec = theta[1:n]
+				#= Derivative of the p_star function. Need to use central difference approx
+				# because auto diff doesn't with with fzero
+				eps = 1e-16
+				#function d_pstar_d_rho(rho,lambda)
+					res = (p_star(rho + eps,lambda) - p_star(rho - eps,lambda)) / (2*eps)
+					return res
+				end=#
+
+				function d_pstar_d_rho(rho,lambda)
+					res = d_share(p_star(rho,lambda)) / (dd_share(p_star(rho,lambda))*(p_star(rho,lambda) - rho - lambda*max_mc) + 2*d_share(p_star(rho,lambda)))
+					return res
+				end
+
 				
-				for i in 1:length(rho_vec)
-					f(l) =  ((rho_vec[i] - c)*d_share(p_star(rho_vec[i],l))*d_pstar_d_rho(rho_vec[i],l) + share(p_star(rho_vec[i],l)))*pdf(l)
-					wfocs_vec[i] = quadgk(f,big(lambda_vec[i]), big(lambda_vec[i+1]); abstol= 1e-16)[1]
-				end
+				##### CODE THAT USES NLSOLVE #####
 
-				for i in 1:(length(lambda_vec)-2) # indexing is inclusive so x:x = x for any x
-					wfocs_vec[i + length(rho_vec)] = share(p_star(rho_vec[i],lambda_vec[i+1]))*(p_star(rho_vec[i],lambda_vec[i+1]) - lambda_vec[i+1]*max_mc - c) - share(p_star(rho_vec[i+1], lambda_vec[i+1]))*(p_star(rho_vec[i+1],lambda_vec[i+1]) - rho_vec[i+1] - lambda_vec[i+1]*max_mc + rho_vec[i] - c)
-				end
-				toc()
-			end 
-			wfocs_test = [0.0;0.0;0.0]
-			x0 = [10.0;1.0;.50]
-			wfocs!(x0,wfocs_test )
-			println(wfocs_test)
-			solution = nlsolve(wfocs!, x0,method=:trust_region, show_trace = true, ftol = 1e-12)
-			println(solution)
+				# Defining Wholesaler FOCs which can then be solved. Following the syntax to use
+				# NLsovle package.
+				# NOTE: Can refomulate as constrained minimization if this doesn't work
 
-			# Code using optimizer ****************
-			#=
-			opt = Opt(:LN_COBYLA,3)
-			lower_bounds!(opt,[0,0,0])
-			function objf(x,grad)
-				if length(grad) > 0
+				function wfocs!(theta::Vector, wfocs_vec)
+					tic()
+					nfocs = length(theta) # number of FOCs (last param is wholesaler cost)
+					n = round(Int,(nfocs + 1)/2) # figuring out how many parts the price schedule has
+					#println("Solving for $n part price schedule")
+									
+					lambda_vec = [lambda_lb ; theta[n+1:end] ; lambda_ub]
+					rho_vec = theta[1:n]
+					
+					for i in 1:length(rho_vec)
+						f(l) =  ((rho_vec[i] - c)*d_share(p_star(rho_vec[i],l))*d_pstar_d_rho(rho_vec[i],l) + share(p_star(rho_vec[i],l)))*est_pdf(l)
+						wfocs_vec[i] = quadgk(f,big(lambda_vec[i]), big(lambda_vec[i+1]); abstol= 1e-16)[1]
+					end
+
+					for i in 1:(length(lambda_vec)-2) # indexing is inclusive so x:x = x for any x
+						wfocs_vec[i + length(rho_vec)] = share(p_star(rho_vec[i],lambda_vec[i+1]))*(p_star(rho_vec[i],lambda_vec[i+1]) - lambda_vec[i+1]*max_mc - c) - share(p_star(rho_vec[i+1], lambda_vec[i+1]))*(p_star(rho_vec[i+1],lambda_vec[i+1]) - rho_vec[i+1] - lambda_vec[i+1]*max_mc + rho_vec[i] - c)
+					end
+					toc()
+				end 
+				
+				x0 = ones(2*N-1)/2
+				solution = nlsolve(wfocs!, x0,method=:trust_region, show_trace = true, ftol = 1e-12)
+				return solution 		
+
+				#= NOT IN USE 
+				#### Solve price schedule using optimizer ####
+				
+				function wfocs!(wfocs_vec, theta::Vector, grad)
+					tic()
+					nfocs = length(theta) # number of FOCs (last param is wholesaler cost)
+					n = round(Int,(nfocs + 1)/2) # figuring out how many parts the price schedule has
+					#println("Solving for $n part price schedule")
+									
+					lambda_vec = [lambda_lb ; theta[n+1:end] ; lambda_ub]
+					rho_vec = theta[1:n]
+					
+					for i in 1:length(rho_vec)
+						f(l) =  ((rho_vec[i] - c)*d_share(p_star(rho_vec[i],l))*d_pstar_d_rho(rho_vec[i],l) + share(p_star(rho_vec[i],l)))*pdf(l)
+						wfocs_vec[i] = quadgk(f,big(lambda_vec[i]), big(lambda_vec[i+1]); abstol= 1e-16)[1]
+					end
+
+					for i in 1:(length(lambda_vec)-2) # indexing is inclusive so x:x = x for any x
+						wfocs_vec[i + length(rho_vec)] = share(p_star(rho_vec[i],lambda_vec[i+1]))*(p_star(rho_vec[i],lambda_vec[i+1]) - lambda_vec[i+1]*max_mc - c) - share(p_star(rho_vec[i+1], lambda_vec[i+1]))*(p_star(rho_vec[i+1],lambda_vec[i+1]) - rho_vec[i+1] - lambda_vec[i+1]*max_mc + rho_vec[i] - c)
+					end
+					toc()
+					println(wfocs_vec)
+					println(theta)
+				end 
+				
+				opt = Opt(:LN_COBYLA,3)
+				lower_bounds!(opt,[0,0,0])
+				function objf(x,grad)
+					if length(grad) > 0
+					end
+					return 1
 				end
-				return 1
+				min_objective!(opt,objf)
+				equality_constraint!(opt,(res,x,g) -> wfocs!(res,x,g), [1e-6,1e-6,1e-6])
+				
+				(minf, minx, ret) = optimize(opt, [10.0, 5.0, .25])
+				println(minx)
+				println(ret)=#
 			end
-			min_objective!(opt,objf)
-			equality_constraint!(opt,(res,x,g) -> wfocs!(res,x,g), [1e-6,1e-6,1e-6])
-			
-			(minf, minx, ret) = optimize(opt, [1.0, 11.0, 2.0])
-			println(minx)	=#
-	
+			println(price_sched_calc([7,13,1,1],2))
 
-
-	
-
+			#optimizer code goes here
 	
 		else
 			println("Product has no matching price data.")

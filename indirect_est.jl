@@ -202,46 +202,16 @@ for market in markets
 				
 				x0 = ones(2*N-1)/2
 				solution = nlsolve(wfocs!, x0,method=:trust_region, show_trace = true, ftol = 1e-12)
-				return solution 		
-
-				#= NOT IN USE 
-				#### Solve price schedule using optimizer ####
+				est_rhos = solution.zero[1:N] # need to return this. These are the prices for the price schedule
+				est_lambdas = [lambda_lb; solution.zero[N+1:end]; lambda_ub] # remaining parameters are lambda cutoffs
 				
-				function wfocs!(wfocs_vec, theta::Vector, grad)
-					tic()
-					nfocs = length(theta) # number of FOCs (last param is wholesaler cost)
-					n = round(Int,(nfocs + 1)/2) # figuring out how many parts the price schedule has
-					#println("Solving for $n part price schedule")
-									
-					lambda_vec = [lambda_lb ; theta[n+1:end] ; lambda_ub]
-					rho_vec = theta[1:n]
-					
-					for i in 1:length(rho_vec)
-						f(l) =  ((rho_vec[i] - c)*d_share(p_star(rho_vec[i],l))*d_pstar_d_rho(rho_vec[i],l) + share(p_star(rho_vec[i],l)))*pdf(l)
-						wfocs_vec[i] = quadgk(f,big(lambda_vec[i]), big(lambda_vec[i+1]); abstol= 1e-16)[1]
-					end
-
-					for i in 1:(length(lambda_vec)-2) # indexing is inclusive so x:x = x for any x
-						wfocs_vec[i + length(rho_vec)] = share(p_star(rho_vec[i],lambda_vec[i+1]))*(p_star(rho_vec[i],lambda_vec[i+1]) - lambda_vec[i+1]*max_mc - c) - share(p_star(rho_vec[i+1], lambda_vec[i+1]))*(p_star(rho_vec[i+1],lambda_vec[i+1]) - rho_vec[i+1] - lambda_vec[i+1]*max_mc + rho_vec[i] - c)
-					end
-					toc()
-					println(wfocs_vec)
-					println(theta)
-				end 
-				
-				opt = Opt(:LN_COBYLA,3)
-				lower_bounds!(opt,[0,0,0])
-				function objf(x,grad)
-					if length(grad) > 0
-					end
-					return 1
+				# Calculating fixed fees
+				est_ff = [0.0]
+				for k in 2:N
+					A = (p_star(est_rhos[k],est_lambdas[k]) - est_rhos[k] - est_lambdas[k])*share(p_star(est_rhos[k], est_lambdas[k]))*M - (p_star(est_rhos[k-1], est_lambdas[k]) - est_rhos[k-1] - est_lambdas[k])*share(p_star(est_rhos[k-1], est_lambdas[k]))*M + est_ff[k-1]
+					push!(est_ff,A)
 				end
-				min_objective!(opt,objf)
-				equality_constraint!(opt,(res,x,g) -> wfocs!(res,x,g), [1e-6,1e-6,1e-6])
-				
-				(minf, minx, ret) = optimize(opt, [10.0, 5.0, .25])
-				println(minx)
-				println(ret)=#
+				return (est_rhos,est_ff,est_lambdas)
 			end
 			println(price_sched_calc([7,13,1,1],2))
 

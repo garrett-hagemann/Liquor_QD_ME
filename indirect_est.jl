@@ -89,6 +89,7 @@ for market in markets
 		matched_upc = (df[prod_bool, :_merge_purchases][1] == 3)
 
 		if matched_upc == true # Only need to work with matched products. No price sched for non-matched.
+			tic()
 			println("Product has matched price data. Evaluating cutoff prices.")
 			#Defining some constants for use in the share function
 			xb_prod = (prod_chars[:,2:end]*coef_vec[:,2:end]')[1] + df[prod_bool,:xi][1] # scalar
@@ -146,6 +147,21 @@ for market in markets
 			d_share(p) = ForwardDiff.derivative(share, p[1]) #p should be scalar. Optimization routine returns a 1 element array at some point
 			dd_share(p) = ForwardDiff.derivative(d_share,p[1])
 
+			function p_star(rho::Number,l::Number)
+				function g!(p,gvec)
+					gvec[1] =  (p - rho - l)*d_share(p) + share(p)
+				end
+				
+				res = nlsolve(g!,[rho+l]) 
+				return res.zero[1]
+			end
+
+
+			#=Interpolationg p_star at a bunch of points to help speed up calculation =#
+			p_star_grid = [p_star(i,j) for i = 1.0:100.0, j = 1.0:100.0]
+			p_star_grid = convert(Array{Float64,2},p_star_grid)
+			p_star_itp = interpolate(p_star_grid, BSpline(Quadratic(Reflect())), OnGrid())
+			
 			function price_sched_calc(params,N)
 				# params are the params of the wholesaler's problem we're trying to
 				# estimate. 
@@ -157,15 +173,15 @@ for market in markets
 				max_mc = params[2] # max MC for retailer. Scales type parameter
 				a = exp(params[3]) # first param for Beta distribution
 				b = exp(params[4]) # second param for Beta distribution
-				est_pdf(x) = pdf(Beta(a,b),x)
+				est_pdf(x) = pdf(Beta(a,b),x/max_mc)
 
 				#Defining p-star function. Requires solving NL equation
-				function p_star(rho::Number,lambda::Number)
+			#=	function p_star(rho::Number,l::Number)
 					function g!(p,gvec)
-						gvec[1] =  (p - rho - lambda*max_mc)*d_share(p) + share(p)
+						gvec[1] =  (p - rho - l)*d_share(p) + share(p)
 					end
 					
-					res = nlsolve(g!,[rho+lambda*max_mc]) 
+					res = nlsolve(g!,[rho+l]) 
 					return res.zero[1]
 				end
 
@@ -174,10 +190,10 @@ for market in markets
 				p_star_grid = [p_star(i,j) for i = 1.0:100.0, j = 1.0:100.0]
 				p_star_grid = convert(Array{Float64,2},p_star_grid)
 				p_star_itp = interpolate(p_star_grid, BSpline(Quadratic(Reflect())), OnGrid())
-				
+				=#
 				# Derivative of the p_star function. Need to use central difference approx
 				function d_pstar_d_rho(rho,lambda)
-					res = d_share(p_star_itp[rho,lambda]) / (dd_share(p_star_itp[rho,lambda])*(p_star_itp[rho,lambda] - rho - lambda*max_mc) + 2*d_share(p_star_itp[rho,lambda]))
+					res = d_share(p_star_itp[rho,lambda]) / (dd_share(p_star_itp[rho,lambda])*(p_star_itp[rho,lambda] - rho - lambda) + 2*d_share(p_star_itp[rho,lambda]))
 					return res[1]
 				end
 				
@@ -201,8 +217,9 @@ for market in markets
 						wfocs_vec[i] = sparse_int(f,lambda_vec[i], lambda_vec[i+1])
 					end
 					for i in 1:(length(lambda_vec)-2) # indexing is inclusive so x:x = x for any x
-					wfocs_vec[i + length(rho_vec)] = share(p_star_itp[rho_vec[i],lambda_vec[i+1]])*(p_star_itp[rho_vec[i],lambda_vec[i+1]] - lambda_vec[i+1]*max_mc - c) - share(p_star_itp[rho_vec[i+1], lambda_vec[i+1]])*(p_star_itp[rho_vec[i+1],lambda_vec[i+1]] - rho_vec[i+1] - lambda_vec[i+1]*max_mc + rho_vec[i] - c)
+					wfocs_vec[i + length(rho_vec)] = share(p_star_itp[rho_vec[i],lambda_vec[i+1]])*(p_star_itp[rho_vec[i],lambda_vec[i+1]] - lambda_vec[i+1] - c) - share(p_star_itp[rho_vec[i+1], lambda_vec[i+1]])*(p_star_itp[rho_vec[i+1],lambda_vec[i+1]] - rho_vec[i+1] - lambda_vec[i+1] + rho_vec[i] - c)
 					end
+					print(".") # print . for each eval of wfocs
 				end 
 				
 				x0 = ones(2*N-1)/2
@@ -234,13 +251,14 @@ for market in markets
 			x0 = [7.0,13.0,0.0,0.0]
 			g(x) = obj_func(x,N,W)
 			#println(g(x0))
-			optim_res = optimize(g,x0,NelderMead(),OptimizationOptions(show_every = true))
+			optim_res = optimize(g,x0,BFGS(),OptimizationOptions(show_every = true, iterations = 10000))
 			println(optim_res)
 			min_X = Optim.minimizer(optim_res)
 			println(min_X)
 			println(price_sched_calc(min_X,N))
 			println(obs_rhos)
 			println(obs_ff)
+			toc()
 		else
 			println("Product has no matching price data.")
 		end

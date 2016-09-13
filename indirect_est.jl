@@ -146,6 +146,7 @@ for market in markets
 			#Derivatives of the share fuction
 			d_share(p) = ForwardDiff.derivative(share, p[1]) #p should be scalar. Optimization routine returns a 1 element array at some point
 			dd_share(p) = ForwardDiff.derivative(d_share,p[1])
+			ddd_share(p) = ForwardDiff.derivative(dd_share,p[1])
 
 			function p_star(rho::Number,l::Number)
 				function g!(p,gvec)
@@ -196,9 +197,19 @@ for market in markets
 				p_star_itp = interpolate(p_star_grid, BSpline(Quadratic(Reflect())), OnGrid())
 				=#
 				# Derivative of the p_star function. Need to use central difference approx
-				function d_pstar_d_rho(rho,lambda)
+				function d_pstar_d_rho(rho,lambda) # note that this is the same as d_pstar_d_lambda
 					res = d_share(p_star_itp[rho,lambda]) / (dd_share(p_star_itp[rho,lambda])*(p_star_itp[rho,lambda] - rho - lambda) + 2*d_share(p_star_itp[rho,lambda]))
 					return res[1]
+				end
+				function d_pstar_d_lambda(rho,lambda) # see above
+					return d_pstar_d_rho(rho,lambda)
+				end
+				function d2_pstar_d2_rho(rho,lambda)
+					num1 = (dd_share(p_star_itp[rho,lambda])*(p_star_itp[rho,lambda] - rho - lambda) + 2*d_share(p_star_itp[rho,lambda]))
+					num2 = d_share(p_star_itp[rho,lambda])*(dd_share(p_star_itp[rho,lambda])*(d_pstar_d_rho(rho,lambda) - 1) + ((p_star_itp[rho,lambda] - rho - lambda)*ddd_share(p_star_itp[rho,lambda]) + 2*dd_share(p_star_itp[rho,lambda]))*d_pstar_d_rho(rho,lambda))
+					den = dd_share(p_star_itp[rho,lambda])*(p_star_itp[rho,lambda] - rho - lambda) + 2*d_share(p_star_itp[rho,lambda])
+					res = (num1 - num2)/(den^2)
+					return res
 				end
 				
 				
@@ -224,10 +235,61 @@ for market in markets
 					wfocs_vec[i + length(rho_vec)] = share(p_star_itp[rho_vec[i],lambda_vec[i+1]])*(p_star_itp[rho_vec[i],lambda_vec[i+1]] - lambda_vec[i+1] - c) - share(p_star_itp[rho_vec[i+1], lambda_vec[i+1]])*(p_star_itp[rho_vec[i+1],lambda_vec[i+1]] - rho_vec[i+1] - lambda_vec[i+1] + rho_vec[i] - c)
 					end
 					print(".") # print . for each eval of wfocs
+				end
+				function wfocs_jac!(theta::Vector, wfocs_jac_vec)
+					nfocs = length(theta)
+					n = round(Int,(nfocs+1)/2)
+					lambda_vec = [lambda_lb ; theta[n+1:end] ; lambda_ub]
+					rho_vec = theta[1:n]
+					# rho-rho part of Jacobian
+					for k in 1:length(rho_vec)
+						for j in 1:length(rho_vec)
+							if j==k
+								f(l) = ((rho_vec[k] - c)*(d_share(p_star_itp[rho_vec[k],l])*d2_pstar_d2_rho(rho_vec[k],l) + d_pstar_d_rho(rho_vec[k], l)^2*dd_share(p_star_itp[rho_vec[k],l])) + d_share(p_star_itp[rho_vec[k],l])*d_pstar_d_rho(rho_vec[k],l)*2)*est_pdf(l)
+								wfocs_jac_vec[k,j] = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+							else
+								wfocs_jac_vec[k,j] = 0
+							end
+						end
+					end
+					#rho-lambda part of Jacobian
+					for k in 1:length(rho_vec)
+						for j in 2:(length(lambda_vec)-1) # different range to line up j,k correctly
+							if j == k
+								wfocs_jac_vec[k,j+(length(rho_vec)-1)] = -((rho_vec[k] - c)*d_share(p_star_itp[rho_vec[k],lambda_vec[j]])*d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + share(p_star_itp[rho_vec[k],lambda_vec[j]]))*est_pdf(lambda_vec[j])
+							elseif j == k+1
+								wfocs_jac_vec[k,j+(length(rho_vec)-1)] = ((rho_vec[k] - c)*d_share(p_star_itp[rho_vec[k],lambda_vec[j]])*d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + share(p_star_itp[rho_vec[k],lambda_vec[j]]))*est_pdf(lambda_vec[j])
+							else
+								wfocs_jac_vec[k,j+(length(rho_vec)-1)] = 0
+							end
+						end
+					end
+					#lambda-rho part of Jacobian
+					for k in 2:(length(lambda_vec)-1)
+						for j in 1:length(rho_vec)
+							if j == k-1
+								wfocs_jac_vec[k+(length(rho_vec)-1),j]= share(p_star_itp[rho_vec[j],lambda_vec[k]])*d_pstar_d_rho(rho_vec[j],lambda_vec[k]) + (p_star_itp[rho_vec[j],lambda_vec[k]] - lambda_vec[k] - c)*d_share(p_star_itp[rho_vec[j],lambda_vec[k]])*d_pstar_d_rho(rho_vec[j],lambda_vec[k]) - share(p_star_itp[rho_vec[j+1],lambda_vec[k]])
+							elseif j == k
+								wfocs_jac_vec[k+(length(rho_vec)-1),j] = share(p_star_itp[rho_vec[j],lambda_vec[k]])*(d_pstar_d_rho(rho_vec[j],lambda_vec[k]) - 1) + (p_star_itp[rho_vec[j],lambda_vec[k]] - rho_vec[j] - lambda_vec[k] + rho_vec[j-1] - c)*d_share(p_star_itp[rho_vec[j],lambda_vec[k]])*d_pstar_d_rho(rho_vec[j],lambda_vec[k])
+							else
+								wfocs_jac_vec[k+(length(rho_vec)-1),j] = 0
+							end
+						end
+					end
+					#lambda-lambda part of Jacobian
+					for k in 2:(length(lambda_vec)-1)
+						for j in 2:(length(lambda_vec)-1)
+							if j == k
+								wfocs_jac_vec[k+(length(rho_vec)-1),j+(length(rho_vec)-1)] = share(p_star_itp[rho_vec[k-1],lambda_vec[k]])*(d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) - 1) + (p_star_itp[rho_vec[k-1],lambda_vec[k]] - lambda_vec[k] - c)*d_share(p_star_itp[rho_vec[k-1],lambda_vec[k]])d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) - (share(p_star_itp[rho_vec[k],lambda_vec[k]])*(d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) - 1) + (p_star_itp[rho_vec[k], lambda_vec[k]] - rho_vec[k] - lambda_vec[k] + rho_vec[k-1] - c)*d_share(p_star_itp[rho_vec[k],lambda_vec[k]])*d_pstar_d_lambda(rho_vec[k],lambda_vec[k]))	
+							else
+								wfocs_jac_vec[k+(length(rho_vec)-1),j+(length(rho_vec)-1)] = 0
+							end
+						end
+					end 
 				end 
 				
 				x0 = ones(2*N-1)/2
-				solution = nlsolve(wfocs!, x0,method=:trust_region, show_trace = false, ftol = 1e-8)
+				solution = nlsolve(wfocs!, wfocs_jac!,x0,method=:trust_region, show_trace = false, ftol = 1e-8)
 				est_rhos = solution.zero[1:N] # need to return this. These are the prices for the price schedule
 				est_lambdas = [lambda_lb; solution.zero[N+1:end]; lambda_ub] # remaining parameters are lambda cutoffs
 				

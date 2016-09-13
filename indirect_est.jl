@@ -101,7 +101,7 @@ for market in markets
 			end
 
 			#Grabbing market size. Needs to be the same as that used to estimate shares
-			M = df[prod_bool,:M][1]
+			#M = df[prod_bool,:M][1]
 			prod_price = df[prod_bool, :price][1]
 
 			# lists of observed prices and quantities. Need these to calculate error using 
@@ -151,6 +151,9 @@ for market in markets
 				function g!(p,gvec)
 					gvec[1] =  (p - rho - l)*d_share(p) + share(p)
 				end
+				function gj!(p, gjvec)
+					gjvec[1] = (p - rho - l)*dd_share(p) + 2.0*share(p)
+				end
 				
 				res = nlsolve(g!,[rho+l]) 
 				return res.zero[1]
@@ -173,6 +176,7 @@ for market in markets
 				max_mc = params[2] # max MC for retailer. Scales type parameter
 				a = exp(params[3]) # first param for Beta distribution
 				b = exp(params[4]) # second param for Beta distribution
+				M = exp(params[5])
 				est_pdf(x) = pdf(Beta(a,b),x/max_mc)
 
 				#Defining p-star function. Requires solving NL equation
@@ -248,10 +252,10 @@ for market in markets
 		
 			N = 4
 			W = eye(2*N)
-			x0 = [7.0,13.0,0.0,0.0]
+			x0 = [17.0, 13.0, 0.0, 0.0, 6.0]
 			g(x) = obj_func(x,N,W)
 			#println(g(x0))
-			optim_res = optimize(g,x0,BFGS(),OptimizationOptions(show_every = true, iterations = 10000))
+			optim_res = optimize(g,x0,NelderMead(),OptimizationOptions(show_every = true, iterations = 1000))
 			println(optim_res)
 			min_X = Optim.minimizer(optim_res)
 			println(min_X)

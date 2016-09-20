@@ -248,7 +248,9 @@ D
 						wfocs_vec[i] = sparse_int(f,lambda_vec[i], lambda_vec[i+1])
 					end
 					for i in 1:(length(lambda_vec)-2) # indexing is inclusive so x:x = x for any x
-					wfocs_vec[i + length(rho_vec)] = share(p_star(rho_vec[i],lambda_vec[i+1]))*(p_star(rho_vec[i],lambda_vec[i+1]) - lambda_vec[i+1] - c) - share(p_star(rho_vec[i+1], lambda_vec[i+1]))*(p_star(rho_vec[i+1],lambda_vec[i+1]) - rho_vec[i+1] - lambda_vec[i+1] + rho_vec[i] - c)
+						u1 = p_star(rho_vec[i],lambda_vec[i+1])
+						u2 = p_star(rho_vec[i+1],lambda_vec[i+1])
+						wfocs_vec[i + length(rho_vec)] = share(u1)*(u1 - lambda_vec[i+1] - c) - share(u2)*(u2 - rho_vec[i+1] - lambda_vec[i+1] + rho_vec[i] - c)
 					end
 					print(".") # print . for each eval of wfocs
 				end

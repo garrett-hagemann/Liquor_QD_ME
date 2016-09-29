@@ -64,8 +64,6 @@ function sparse_int(f::Function, a::Number, b::Number)
 end
 
 # defining limits of type distribution. Should be consistent with whatever PDF is used
-lambda_lb = 0
-lambda_ub = 1
 
 
 
@@ -127,6 +125,7 @@ for market in markets
 				push!(obs_ff,intercept) # append to list obs_ff
 			end
 
+
 			#Defining share function which is ONLY a function of price
 			function share(p)
 				#= Function calculates shares of a given  product in a given market 
@@ -159,7 +158,6 @@ for market in markets
 				res = nlsolve(g!,gj!,[rho+l],show_trace = false, method = :trust_region, extended_trace = false) 
 				return res.zero[1]
 			end
-
 			#=Interpolationg p_star at a bunch of points to help speed up calculation =#
 			p_star_grid = [p_star(i,j) for i = 1.0:100.0, j = 1.0:100.0]
 			p_star_grid = convert(Array{Float64,2},p_star_grid)
@@ -194,40 +192,23 @@ D
 				a = exp(params[3]) # first param for Beta distribution
 				b = exp(params[4]) # second param for Beta distribution
 				#M = exp(params[5])
+				lambda_lb = 0
+				lambda_ub = max_mc
 				est_pdf(x) = pdf(Beta(a,b),x/max_mc)
+				est_cdf(x) = cdf(Beta(a,b),x/max_mc)
 
-				#Defining p-star function. Requires solving NL equation
-			#=	function p_star(rho::Number,l::Number)
-					function g!(p,gvec)
-						gvec[1] =  (p - rho - l)*d_share(p) + share(p)
-					end
-					
-					res = nlsolve(g!,[rho+l]) 
-					return res.zero[1]
-				end
+				#= finding rho_0. rho_0 is such that the lowest type is indifferent about purchasing (entering the market)
+				For retailers, this equates to a 0-profit condition:
+				(p_star(rho_0,lambda_ub) - rho_0 - lambda_ub)*share(p_star(rho_0,lambda_ub)) = 0
 
-
-				#=Interpolationg p_star at a bunch of points to help speed up calculation =#
-				p_star_grid = [p_star(i,j) for i = 1.0:100.0, j = 1.0:100.0]
-				p_star_grid = convert(Array{Float64,2},p_star_grid)
-				p_star_itp = interpolate(p_star_grid, BSpline(Quadratic(Reflect())), OnGrid())
-				
-				# Derivative of the p_star function. Need to use central difference approx
-				function d_pstar_d_rho(rho,lambda) # note that this is the same as d_pstar_d_lambda
-					res = d_share(p_star_itp[rho,lambda]) / (dd_share(p_star_itp[rho,lambda])*(p_star_itp[rho,lambda] - rho - lambda) + 2*d_share(p_star_itp[rho,lambda]))
-					return res[1]
+				function low_profit!(rho_0, lpvec)
+					u = p_star(rho_0,lambda_lb)
+					lpvec[1] = (u - rho_0 - lambda_lb)*share(u)
 				end
-				function d_pstar_d_lambda(rho,lambda) # see above
-					return d_pstar_d_rho(rho,lambda)
-				end
-				function d2_pstar_d2_rho(rho,lambda)
-					num1 = (dd_share(p_star_itp[rho,lambda])*(p_star_itp[rho,lambda] - rho - lambda) + 2*d_share(p_star_itp[rho,lambda]))
-					num2 = d_share(p_star_itp[rho,lambda])*(dd_share(p_star_itp[rho,lambda])*(d_pstar_d_rho(rho,lambda) - 1) + ((p_star_itp[rho,lambda] - rho - lambda)*ddd_share(p_star_itp[rho,lambda]) + 2*dd_share(p_star_itp[rho,lambda]))*d_pstar_d_rho(rho,lambda))
-					den = dd_share(p_star_itp[rho,lambda])*(p_star_itp[rho,lambda] - rho - lambda) + 2*d_share(p_star_itp[rho,lambda])
-					res = (num1 - num2)/(den^2)
-					return res
-				end
-				=#	
+				rho_0_sol = nlsolve(low_profit!,[12.0])
+				rho_0 = rho_0_sol.zero[1]
+				=#
+				rho_0 = 1000
 				
 				##### CODE THAT USES NLSOLVE #####
 
@@ -236,92 +217,40 @@ D
 				# NOTE: Can refomulate as constrained minimization if this doesn't work
 
 				function wfocs!(theta::Vector, wfocs_vec)
-					nfocs = length(theta) # number of FOCs (last param is wholesaler cost)
-					n = round(Int,(nfocs + 1)/2) # figuring out how many parts the price schedule has
-					#println("Solving for $n part price schedule")
+					K = N-1 # Number of rhos / lambdas
 									
-					lambda_vec = [lambda_lb ; theta[n+1:end] ; lambda_ub]
-					rho_vec = theta[1:n]
-					for i in 1:length(rho_vec)
+					lambda_vec = [lambda_ub; theta[K+1:end]; lambda_lb] # not that these are reversed: i.e. for N = 4 -> [max_mc, lambda_1, lambda_2, lambda_3, lambda_4 = lambda_lb = 0]. THis is because high lambdas are bad such that lambda_k > lambda_k+1
+D
+					rho_vec = [rho_0 ; theta[1:K]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
+					# Calculating FOCs
+					for i in 2:K+1 # need to up index by 1 to reference right coefs since vectors start indexing at 1
+						#calculating integral for rho FOC
 						f(l) =  ((rho_vec[i] - c)*d_share(p_star(rho_vec[i],l))*d_pstar_d_rho(rho_vec[i],l) + share(p_star(rho_vec[i],l)))*est_pdf(l)
-						#wfocs_vec[i] = quadgk(f,lambda_vec[i], lambda_vec[i+1]; abstol= 1e-16)[1]
-						wfocs_vec[i] = sparse_int(f,lambda_vec[i], lambda_vec[i+1])
-					end
-					for i in 1:(length(lambda_vec)-2) # indexing is inclusive so x:x = x for any x
-						u1 = p_star(rho_vec[i],lambda_vec[i+1])
-						u2 = p_star(rho_vec[i+1],lambda_vec[i+1])
-						wfocs_vec[i + length(rho_vec)] = share(u1)*(u1 - lambda_vec[i+1] - c) - share(u2)*(u2 - rho_vec[i+1] - lambda_vec[i+1] + rho_vec[i] - c)
+						int = sparse_int(f,lambda_vec[i+1], lambda_vec[i])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[i],lambda_vec[i])
+						ps2 = p_star(rho_vec[i-1],lambda_vec[i])
+						#rho FOC for k
+						wfocs_vec[i-1] = int + est_cdf(lambda_vec[i])*((ps1 - rho_vec[i] - lambda_vec[i])*d_share(ps1)*d_pstar_d_rho(rho_vec[i],lambda_vec[i]) + share(ps1)*(d_pstar_d_rho(rho_vec[i],lambda_vec[i]) - 1)) 
+						# lambda FOC for k
+						wfocs_vec[i+K-1] = (rho_vec[i] - c)*share(ps1)*est_pdf(lambda_vec[i]) + est_cdf(lambda_vec[i])*((ps1 - rho_vec[i] - lambda_vec[i])*d_share(ps1)*d_pstar_d_lambda(rho_vec[i],lambda_vec[i]) + share(ps1)*(d_pstar_d_lambda(rho_vec[i],lambda_vec[i]) - 1) - (ps2 - rho_vec[i-1] - lambda_vec[i])*d_share(ps2)*d_pstar_d_lambda(rho_vec[i-1],lambda_vec[i]) - share(ps2)*(d_pstar_d_lambda(rho_vec[i-1],lambda_vec[i]) - 1)) + ((ps1 - rho_vec[i] - lambda_vec[i])*share(ps1) - (ps2 - rho_vec[i-1] - lambda_vec[i])*share(ps2))*est_pdf(lambda_vec[i])
+						
 					end
 					print(".") # print . for each eval of wfocs
 				end
-				function wfocs_jac!(theta::Vector, wfocs_jac_vec)
-					nfocs = length(theta)
-					n = round(Int,(nfocs+1)/2)
-					lambda_vec = [lambda_lb ; theta[n+1:end] ; lambda_ub]
-					rho_vec = theta[1:n]
-					# rho-rho part of Jacobian
-					for k in 1:length(rho_vec)
-						for j in 1:length(rho_vec)
-							if j==k
-								f(l) = ((rho_vec[k] - c)*(d_share(p_star(rho_vec[k],l))*d2_pstar_d2_rho(rho_vec[k],l) + (d_pstar_d_rho(rho_vec[k], l)^2)*dd_share(p_star(rho_vec[k],l))) + d_share(p_star(rho_vec[k],l))*d_pstar_d_rho(rho_vec[k],l)*2)*est_pdf(l)
-								wfocs_jac_vec[k,j] = (sparse_int(f,lambda_vec[k],lambda_vec[k+1]))
-							else
-								wfocs_jac_vec[k,j] = 0
-							end
-						end
-					end
-					#rho-lambda part of Jacobian
-					for k in 1:length(rho_vec)
-						for j in 2:(length(lambda_vec)-1) # different range to line up j,k correctly
-							if j == k
-								u = p_star(rho_vec[k],lambda_vec[j])
-								wfocs_jac_vec[k,j+(length(rho_vec)-1)] = (-((rho_vec[k] - c)*d_share(u)*d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + share(u))*est_pdf(lambda_vec[j]))
-							elseif j == k+1
-								u = p_star(rho_vec[k],lambda_vec[j])
-								wfocs_jac_vec[k,j+(length(rho_vec)-1)] = (((rho_vec[k] - c)*d_share(u)*d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + share(u))*est_pdf(lambda_vec[j]))
-							else
-								wfocs_jac_vec[k,j+(length(rho_vec)-1)] = 0
-							end
-						end
-					end
-					#lambda-rho part of Jacobian
-					for k in 2:(length(lambda_vec)-1)
-						for j in 1:length(rho_vec)
-							if j == k-1
-								u = p_star(rho_vec[j],lambda_vec[k])
-								wfocs_jac_vec[k+(length(rho_vec)-1),j]= (share(u)*d_pstar_d_rho(rho_vec[j],lambda_vec[k]) + (u - lambda_vec[k] - c)*d_share(u)*d_pstar_d_rho(rho_vec[j],lambda_vec[k]) - share(p_star(rho_vec[j+1],lambda_vec[k])))
-							elseif j == k
-								u = p_star(rho_vec[j],lambda_vec[k])
-								wfocs_jac_vec[k+(length(rho_vec)-1),j] = -(share(u)*(d_pstar_d_rho(rho_vec[j],lambda_vec[k]) - 1.0) + (u - rho_vec[j] - lambda_vec[k] + rho_vec[j-1] - c)*d_share(u)*d_pstar_d_rho(rho_vec[j],lambda_vec[k]))
-							else
-								wfocs_jac_vec[k+(length(rho_vec)-1),j] = 0
-							end
-						end
-					end
-					#lambda-lambda part of Jacobian
-					for k in 2:(length(lambda_vec)-1)
-						for j in 2:(length(lambda_vec)-1)
-							if j == k
-								u1 = p_star(rho_vec[k-1],lambda_vec[k])
-								u2 = p_star(rho_vec[k],lambda_vec[k])
-								wfocs_jac_vec[k+(length(rho_vec)-1),j+(length(rho_vec)-1)] = (share(u1)*(d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) - 1) + (u1 - lambda_vec[k] - c)*d_share(u1)*d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) - (share(u2)*(d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) - 1) + (u2 - rho_vec[k] - lambda_vec[k] + rho_vec[k-1] - c)*d_share(u2)*d_pstar_d_lambda(rho_vec[k],lambda_vec[k])))
-							else
-								wfocs_jac_vec[k+(length(rho_vec)-1),j+(length(rho_vec)-1)] = 0
-							end
-						end
-					end 
-				end 
+				
 				srand(1987) #reseeding to x0 is same every time
-				x0 = ones(2*N-1) + randn(2*N-1)
-				#solution = nlsolve(wfocs!,x0,method=:trust_region, show_trace = true, ftol = 1e-8, extended_trace = true, iterations = 1000)
-				solution = nlsolve(wfocs!,wfocs_jac!,x0,method=:trust_region, show_trace = false, ftol = 1e-8, extended_trace = false, iterations = 1000)
-				est_rhos = solution.zero[1:N] # need to return this. These are the prices for the price schedule
-				est_lambdas = [lambda_lb; solution.zero[N+1:end]; lambda_ub] # remaining parameters are lambda cutoffs
+				x0 = ones(2*N-2) + randn(2*N-2)
+				solution = nlsolve(wfocs!,x0,method=:trust_region, show_trace = false, ftol = 1e-8, extended_trace = false, iterations = 1000)
+				#solution = nlsolve(wfocs!,wfocs_jac!,x0,method=:trust_region, show_trace = false, ftol = 1e-8, extended_trace = false, iterations = 1000)
+				est_rhos = [rho_0; solution.zero[1:N-1]] # need to return this. These are the prices for the price schedule
+				est_lambdas = [lambda_ub; solution.zero[N:end]; lambda_lb] # remaining parameters are lambda cutoffs
 				
 				# Calculating fixed fees
 				est_ff = [0.0]
-				for k in 2:N
-					A = (p_star(est_rhos[k],est_lambdas[k]) - est_rhos[k] - est_lambdas[k])*share(p_star(est_rhos[k], est_lambdas[k]))*M - (p_star(est_rhos[k-1], est_lambdas[k]) - est_rhos[k-1] - est_lambdas[k])*share(p_star(est_rhos[k-1], est_lambdas[k]))*M + est_ff[k-1]
+				K = N-1
+				for i in 2:K
+					A = est_ff[i-1] + (p_star(est_rhos[i],est_lambdas[i]) - est_rhos[i] - est_lambdas[i])*share(p_star(est_rhos[i],est_lambdas[i]))*M - (p_star(est_rhos[i-1],est_lambdas[i]) - est_rhos[i-1] - est_lambdas[i])*share(p_star(est_rhos[i-1],est_lambdas[i]))*M
 					push!(est_ff,A)
 				end
 				return (est_rhos,est_ff,est_lambdas)
@@ -330,17 +259,15 @@ D
 			function obj_func(omega::Vector, N::Int, W::Matrix)
 				tic()
 				rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N)
-				vec = [(rho_hat - obs_rhos) ; (ff_hat[2:end] - obs_ff[2:end])]'
+				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[2:end] - obs_ff[2:end])]'
 				res = vec*W*vec'
-				println(res)
 				toc()
 				return res[1]
 			end
-		
-			N = 4
-			#W = eye(2*N-1)
-			W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-1)
-			x0 = [17.0, 13.0, 0.0, 0.0]
+			N = length(obs_rhos)+1
+			W = eye(2*(N-1)- 1)
+			#W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-2)
+			x0 = [0.0, 40.0, 0.0, 0.0]
 			g(x) = obj_func(x,N,W)
 			optim_res = optimize(g,x0,NelderMead(),OptimizationOptions(show_every = true, iterations = 3000))
 			println(optim_res)

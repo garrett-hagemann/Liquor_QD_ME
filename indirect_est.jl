@@ -149,10 +149,10 @@ for market in markets
 
 			function p_star(rho,l)
 				function g!(p,gvec)
-					gvec[1] =  (p - rho - l)*d_share(p) + share(p)
+					gvec[1] =  (p - rho + l)*d_share(p)*M + share(p)*M
 				end
 				function gj!(p, gjvec)
-					gjvec[1] = (p - rho - l)*dd_share(p) + 2.0*d_share(p)
+					gjvec[1] = (p - rho + l)*dd_share(p)*M + 2.0*d_share(p)*M
 				end
 				
 				res = nlsolve(g!,gj!,[rho+l],show_trace = false, method = :trust_region, extended_trace = false) 
@@ -164,17 +164,17 @@ for market in markets
 			p_star_itp = interpolate(p_star_grid, BSpline(Quadratic(Reflect())), OnGrid())
 			function d_pstar_d_rho(rho,lambda) # note that this is the same as d_pstar_d_lambda
 				u = p_star(rho,lambda)
-				res = d_share(u) / (dd_share(u)*(u - rho - lambda) + 2*d_share(u))
+				res = d_share(u) ./ (dd_share(u)*(u - rho + lambda) + 2*d_share(u))
 				return res[1]
 			end
 			function d_pstar_d_lambda(rho,lambda) # see above
-				return d_pstar_d_rho(rho,lambda)
+				return -d_pstar_d_rho(rho,lambda)
 			end
 			function d2_pstar_d2_rho(rho,lambda)
 				u = p_star(rho,lambda)
-				num1 = (dd_share(u)*(u - rho - lambda) + 2*d_share(u))*dd_share(u)*d_pstar_d_rho(rho,lambda)
-				num2 = d_share(u)*(dd_share(u)*(d_pstar_d_rho(rho,lambda) - 1) + ((u - rho - lambda)*ddd_share(u) + 2*dd_share(u))*d_pstar_d_rho(rho,lambda))
-				den = dd_share(u)*(u - rho - lambda) + 2*d_share(u)
+				num1 = (dd_share(u)*(u - rho + lambda) + 2*d_share(u))*dd_share(u)*d_pstar_d_rho(rho,lambda)
+				num2 = d_share(u)*(dd_share(u)*(d_pstar_d_rho(rho,lambda) - 1) + ((u - rho + lambda)*ddd_share(u) + 2*dd_share(u))*d_pstar_d_rho(rho,lambda))
+				den = dd_share(u)*(u - rho + lambda) + 2*d_share(u)
 				res = (num1 - num2)/(den^2)
 D
 				return res
@@ -208,8 +208,8 @@ D
 				rho_0_sol = nlsolve(low_profit!,[12.0])
 				rho_0 = rho_0_sol.zero[1]
 				=#
-				rho_0 = 1000
-				
+				rho_0 = 100
+				#=
 				##### CODE THAT USES NLSOLVE #####
 
 				# Defining Wholesaler FOCs which can then be solved. Following the syntax to use
@@ -219,21 +219,21 @@ D
 				function wfocs!(theta::Vector, wfocs_vec)
 					K = N-1 # Number of rhos / lambdas
 									
-					lambda_vec = [lambda_ub; theta[K+1:end]; lambda_lb] # not that these are reversed: i.e. for N = 4 -> [max_mc, lambda_1, lambda_2, lambda_3, lambda_4 = lambda_lb = 0]. THis is because high lambdas are bad such that lambda_k > lambda_k+1
+					lambda_vec = [lambda_lb; theta[K+1:end]; lambda_ub] # not that these are reversed: i.e. for N = 4 -> [max_mc, lambda_1, lambda_2, lambda_3, lambda_4 = lambda_lb = 0]. THis is because high lambdas are bad such that lambda_k > lambda_k+1
 D
 					rho_vec = [rho_0 ; theta[1:K]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
 					# Calculating FOCs
 					for i in 2:K+1 # need to up index by 1 to reference right coefs since vectors start indexing at 1
 						#calculating integral for rho FOC
-						f(l) =  ((rho_vec[i] - c)*d_share(p_star(rho_vec[i],l))*d_pstar_d_rho(rho_vec[i],l) + share(p_star(rho_vec[i],l)))*est_pdf(l)
-						int = sparse_int(f,lambda_vec[i+1], lambda_vec[i])
+						f(l) =  ((rho_vec[i] - c)*d_share(p_star(rho_vec[i],l))*M*d_pstar_d_rho(rho_vec[i],l) + share(p_star(rho_vec[i],l))*M)*est_pdf(l)
+						int = sparse_int(f,lambda_vec[i],lambda_vec[i+1])
 						# Pre-calculating some stuff to avoid repeated calls to p_star
 						ps1 = p_star(rho_vec[i],lambda_vec[i])
 						ps2 = p_star(rho_vec[i-1],lambda_vec[i])
 						#rho FOC for k
-						wfocs_vec[i-1] = int + est_cdf(lambda_vec[i])*((ps1 - rho_vec[i] - lambda_vec[i])*d_share(ps1)*d_pstar_d_rho(rho_vec[i],lambda_vec[i]) + share(ps1)*(d_pstar_d_rho(rho_vec[i],lambda_vec[i]) - 1)) 
+						wfocs_vec[i-1] = int + (1-est_cdf(lambda_vec[i]))*((ps1 - rho_vec[i] + lambda_vec[i])*d_share(ps1)*M*d_pstar_d_rho(rho_vec[i],lambda_vec[i]) + share(ps1)*M*(d_pstar_d_rho(rho_vec[i],lambda_vec[i]) - 1)) 
 						# lambda FOC for k
-						wfocs_vec[i+K-1] = (rho_vec[i] - c)*share(ps1)*est_pdf(lambda_vec[i]) + est_cdf(lambda_vec[i])*((ps1 - rho_vec[i] - lambda_vec[i])*d_share(ps1)*d_pstar_d_lambda(rho_vec[i],lambda_vec[i]) + share(ps1)*(d_pstar_d_lambda(rho_vec[i],lambda_vec[i]) - 1) - (ps2 - rho_vec[i-1] - lambda_vec[i])*d_share(ps2)*d_pstar_d_lambda(rho_vec[i-1],lambda_vec[i]) - share(ps2)*(d_pstar_d_lambda(rho_vec[i-1],lambda_vec[i]) - 1)) + ((ps1 - rho_vec[i] - lambda_vec[i])*share(ps1) - (ps2 - rho_vec[i-1] - lambda_vec[i])*share(ps2))*est_pdf(lambda_vec[i])
+						wfocs_vec[i+K-1] = (rho_vec[i] - c)*share(ps1)*M*est_pdf(lambda_vec[i]) + (1 - est_cdf(lambda_vec[i]))*((ps1 - rho_vec[i] + lambda_vec[i])*d_share(ps1)*M*d_pstar_d_lambda(rho_vec[i],lambda_vec[i]) + share(ps1)*M*(d_pstar_d_lambda(rho_vec[i],lambda_vec[i]) + 1) - (ps2 - rho_vec[i-1] + lambda_vec[i])*d_share(ps2)*M*d_pstar_d_lambda(rho_vec[i-1],lambda_vec[i]) - share(ps2)*M*(d_pstar_d_lambda(rho_vec[i-1],lambda_vec[i]) + 1)) + ((ps1 - rho_vec[i] + lambda_vec[i])*share(ps1)*M - (ps2 - rho_vec[i-1] + lambda_vec[i])*share(ps2)*M)*(-est_pdf(lambda_vec[i]))
 						
 					end
 					print(".") # print . for each eval of wfocs
@@ -241,19 +241,88 @@ D
 				
 				srand(1987) #reseeding to x0 is same every time
 				x0 = ones(2*N-2) + randn(2*N-2)
-				solution = nlsolve(wfocs!,x0,method=:trust_region, show_trace = false, ftol = 1e-8, extended_trace = false, iterations = 1000)
+				solution = nlsolve(wfocs!,x0,method=:trust_region, show_trace = true, ftol = 1e-8, extended_trace = true, iterations = 1000)
 				#solution = nlsolve(wfocs!,wfocs_jac!,x0,method=:trust_region, show_trace = false, ftol = 1e-8, extended_trace = false, iterations = 1000)
 				est_rhos = [rho_0; solution.zero[1:N-1]] # need to return this. These are the prices for the price schedule
-				est_lambdas = [lambda_ub; solution.zero[N:end]; lambda_lb] # remaining parameters are lambda cutoffs
-				
+				est_lambdas = [lambda_lb; solution.zero[N:end]; lambda_ub] # remaining parameters are lambda cutoffs
+				=#
+				###### RECURSIVE METHOD ######
+				srand(1987)
+				lambda_guess = [lambda_lb; randn(N-1); lambda_ub]
+				lambda_prime_guess = [lambda_lb; randn(N-1); lambda_ub]
+				rho_guess = [rho_0; ones(N-1)]
+				eps = 1e-9 # stopping threshold
+				diff = 1
+				counter = 0
+				while diff > eps
+					# given guess of lambda, find prices
+					for i = 1:N-1 # i refers so part of price schedule, so need to be careful w/ indexing
+						function rho_foc(r) #,rho_foc_vec)
+							ps1 = p_star(r,lambda_guess[i])
+							f(l) =  ((r - c)*d_share(p_star(r,l))*M*d_pstar_d_rho(r,l) + share(p_star(r,l))*M)*est_pdf(l)
+							int = sparse_int(f,lambda_guess[i+1],lambda_guess[i+1+1])
+							res = int + (1-est_cdf(lambda_guess[i+1]))*((ps1 - r + lambda_guess[i+1])*d_share(ps1)*M*d_pstar_d_rho(r,lambda_guess[i+1]) + share(ps1)*M*(d_pstar_d_rho(r,lambda_guess[i+1]) - 1))
+							#rho_foc_vec[1]=res
+							return res
+						end
+						#rho_sol = nlsolve(rho_foc,[2.0],show_trace = true)
+						#= defining bracket. Being generous here as there appear to be multiple roots. we want the one between 0 and rho_0.
+						if one doesn't exist, just push the left boundary back until we get one. at correct solution, there should only be positive roots =#
+						bracket = false
+						le = 0
+						while !bracket
+							f_a = rho_foc(le)
+							f_b = rho_foc(rho_0)
+							if sign(f_a) != sign(f_b)
+								bracket = true
+								break
+							else
+								le = le-1
+							end
+						end
+						rho_sol = fzero(rho_foc,[le,rho_0])
+						rho_hat = rho_sol
+						rho_guess[i+1] = rho_hat
+					end
+					# given a guess of prices, find types
+					for i = 1:N-1
+						function lambda_foc(l)
+							ps1 = p_star(rho_guess[i+1],l)
+							ps2 = p_star(rho_guess[i+1-1],l)
+							res =  (rho_guess[i+1] - c)*share(ps1)*M*est_pdf(l) + (1 - est_cdf(l))*((ps1 - rho_guess[i+1] + l)*d_share(ps1)*M*d_pstar_d_lambda(rho_guess[i+1],l) + share(ps1)*M*(d_pstar_d_lambda(rho_guess[i+1],l) + 1) - (ps2 - rho_guess[i+1-1] + l)*d_share(ps2)*M*d_pstar_d_lambda(rho_guess[i+1-1],l) - share(ps2)*M*(d_pstar_d_lambda(rho_guess[i+1-1],l) + 1)) + ((ps1 - rho_guess[i+1] + l)*share(ps1)*M - (ps2 - rho_guess[i+1-1] + l)*share(ps2)*M)*(-est_pdf(l))
+							return res
+						end
+						bracket = false
+						le = lambda_lb
+						while !bracket
+							f_a = lambda_foc(le)
+							f_b = lambda_foc(lambda_ub)
+							if sign(f_a) != sign(f_b)
+								bracket = true
+								break
+							else
+								le = le-1
+							end
+						end
+						lambda_hat = fzero(lambda_foc,le,lambda_ub)
+						lambda_prime_guess[i+1] = lambda_hat
+					end
+					diff = sum(abs(lambda_guess - lambda_prime_guess))
+					println(diff)
+					lambda_guess = copy(lambda_prime_guess)
+					counter = counter +1
+				end
+				println("Took $counter iterations")
+				#=
 				# Calculating fixed fees
 				est_ff = [0.0]
 				K = N-1
-				for i in 2:K
-					A = est_ff[i-1] + (p_star(est_rhos[i],est_lambdas[i]) - est_rhos[i] - est_lambdas[i])*share(p_star(est_rhos[i],est_lambdas[i]))*M - (p_star(est_rhos[i-1],est_lambdas[i]) - est_rhos[i-1] - est_lambdas[i])*share(p_star(est_rhos[i-1],est_lambdas[i]))*M
+				for i in 2:K+1
+					A = est_ff[i-1] + (p_star(est_rhos[i],est_lambdas[i]) - est_rhos[i] + est_lambdas[i])*share(p_star(est_rhos[i],est_lambdas[i]))*M - (p_star(est_rhos[i-1],est_lambdas[i]) - est_rhos[i-1] + est_lambdas[i])*share(p_star(est_rhos[i-1],est_lambdas[i]))*M
 					push!(est_ff,A)
 				end
-				return (est_rhos,est_ff,est_lambdas)
+				return (est_rhos,est_ff,est_lambdas)=#
+				return (rho_guess,lambda_guess)
 			end
 			
 			function obj_func(omega::Vector, N::Int, W::Matrix)
@@ -267,7 +336,9 @@ D
 			N = length(obs_rhos)+1
 			W = eye(2*(N-1)- 1)
 			#W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-2)
-			x0 = [0.0, 40.0, 0.0, 0.0]
+			x0 = [0.0, 5.0, 0.0, 0.0]
+			println(price_sched_calc(x0,4))
+			break
 			g(x) = obj_func(x,N,W)
 			optim_res = optimize(g,x0,NelderMead(),OptimizationOptions(show_every = true, iterations = 3000))
 			println(optim_res)

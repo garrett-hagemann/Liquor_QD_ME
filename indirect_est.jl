@@ -144,7 +144,7 @@ for market in markets
 
 			
 			### NLsolve pstar
-			#=function p_star(rho,l)
+			function p_star(rho,l)
 				function g!(p,gvec)
 					gvec[1] =  (p - rho + l)*d_share(p)*M + share(p)*M
 				end
@@ -152,11 +152,11 @@ for market in markets
 					gjvec[1] = (p - rho + l)*dd_share(p)*M + 2.0*d_share(p)*M
 				end
 				
-				res = nlsolve(g!,gj!,[rho-l],show_trace = false, method = :trust_region, extended_trace = false) 
+				res = nlsolve(g!,gj!,[rho-l],show_trace = true, extended_trace = true, method = :trust_region) 
 				return res.zero[1]
-			end =#
+			end  
 			### Recursive p_star
-			function p_star(rho,l)
+			#= function p_star(rho,l)
 				tol = 1e-12
 				function g(p)
 					return -share(p)/d_share(p) + rho - l
@@ -165,12 +165,13 @@ for market in markets
 				diff = 1
 				while diff > tol
 					new_p = g(old_p)
-					diff = abs(new_p - old_p)
+					diff = abs(new_p - old_p)/abs(old_p)
 					old_p = copy(new_p)
+					println(old_p)
 				end
 				res = old_p
 				return res
-			end
+			end =#
 			#=Interpolationg p_star at a bunch of points to help speed up calculation =#
 			#p_star_grid = [p_star(i,j) for i = 1.0:100.0, j = 1.0:100.0]
 			#p_star_grid = convert(Array{Float64,2},p_star_grid)
@@ -215,14 +216,24 @@ for market in markets
 
 				c = params[1] # marginal cost for wholesaler
 				max_mc = params[2] # max MC for retailer. Scales type parameter
-				a = exp(params[3]) # first param for Beta distribution
-				b = exp(params[4]) # second param for Beta distribution
 				#M = exp(params[5])
+				#distribution parameters
+				a = exp(params[3]) #
+				b = exp(params[4]) # 
 				lambda_lb = 0
 				lambda_ub = max_mc
+					
 				est_cdf(x) = cdf(Beta(a,b),x/max_mc)
 				est_pdf(x) = pdf(Beta(a,b),x/max_mc)/max_mc
-				d_est_pdf(x) = (est_pdf(x)*((a + b - 2.0)*x/max_mc - (a -1.0))/((x/max_mc-1.0)*x/max_mc))/max_mc^2
+				d_est_pdf(x) = ((1/max_mc)^2)*((a + b - 2)*(x/max_mc) - (a - 1))/(((x/max_mc) -1)*(x/max_mc))*pdf(Beta(a,b),x/max_mc)
+				
+				#=
+				#= below formulation of th Kumaraswarmy distribution isn't exactly right. Should only be defined on (0,1) and pdf is 0 outside that. Programming that in makes it act funny =#		
+				est_cdf(x) = 1.0 - (1.0-(x/max_mc)^a)^b
+				est_pdf(x) = ForwardDiff.derivative(est_cdf,x)
+				d_est_pdf(x) = ForwardDiff.derivative(est_pdf,x)
+				=#
+
 
 				#= finding rho_0. rho_0 is such that the lowest type is indifferent about purchasing (entering the market)
 				For retailers, this equates to a 0-profit condition:
@@ -311,7 +322,7 @@ for market in markets
 					#rho rho part diagonal elements
 					for i = 1:N-1
 						k = i+1
-						f(l) = ((rho_vec[k] - c)*(d_share(p_star(rho_vec[k],l))*M*d2_pstar_d2_rho(rho_vec[k],l) + (d_pstar_d_rho(rho_vec[k],l)^2)*dd_share(p_star(rho_vec[k],l))*M) + 2*d_share(p_star(rho_vec[k],l))*M*d_pstar_d_rho(rho_vec[k],l))*est_pdf(lambda_vec[k])
+						f(l) = ((rho_vec[k] - c)*(d_share(p_star(rho_vec[k],l))*M*d2_pstar_d2_rho(rho_vec[k],l) + (d_pstar_d_rho(rho_vec[k],l)^2)*dd_share(p_star(rho_vec[k],l))*M) + 2*d_share(p_star(rho_vec[k],l))*M*d_pstar_d_rho(rho_vec[k],l))*est_pdf(l)
 						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
 						ps1 = p_star(rho_vec[k],lambda_vec[k])
 						ss1 = (ps1 - rho_vec[k] + lambda_vec[k])*(d_share(ps1)*M*d2_pstar_d2_rho(rho_vec[k],lambda_vec[k]) + (d_pstar_d_rho(rho_vec[k],lambda_vec[k])^2)*dd_share(ps1)*M)
@@ -409,17 +420,18 @@ for market in markets
 						end
 					end
 				end
-				
-				x0 = [2.0,0.50,0.25,1.0,2.0,3.0] + 0*randn(2*(N-1))
+				rho_start = [max_mc/i for i = 1:N-1]
+				lambda_start = [(lambda_ub -lambda_lb)/(N)*i for i = 1:N-1] 	
+				x0 = [rho_start;lambda_start] + 0*randn(2*(N-1))
 				# checking hessian and gradient
 				#=	
 				println(x0)
 				gtest1 = ones(2*(N-1))
 				gtest2 = ones(2*(N-1))
 				htest = ones(2*(N-1),2*(N-1))
-				eps = [0.0,0.0,0.0,0.0,0.0,0.0]
+				eps = zeros(2*(N-1)) 
 				step = 1e-9
-				eps[6] = step
+				eps[1] = step
 				est_grad = (w_profit(x0+eps) - w_profit(x0-eps))/(2*step)
 				println("Numerical grad: ", est_grad)
 				wfocs!(x0,gtest1)
@@ -432,28 +444,25 @@ for market in markets
 				println(htest)
 				solution = 1
 				=#
-				solution = optimize(w_profit,wfocs!,whess!,x0,method=Newton(), show_trace = true, extended_trace = true, iterations = 500)
-				println(Optim.minimizer(solution))
+				solution = optimize(w_profit,wfocs!,whess!,x0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 1500, f_tol = 1e-12, g_tol = 1e-6)
+				est_rhos = [rho_0 ; Optim.minimizer(solution)[1:N-1]]
+				est_lambdas = [lambda_lb ; Optim.minimizer(solution)[N:end] ; lambda_ub]
 
-
-				#=
+				
 				# Calculating fixed fees
 				est_ff = [0.0]
-				K = N-1
-				for i in 2:K+1
-					A = est_ff[i-1] + (p_star(est_rhos[i],est_lambdas[i]) - est_rhos[i] + est_lambdas[i])*share(p_star(est_rhos[i],est_lambdas[i]))*M - (p_star(est_rhos[i-1],est_lambdas[i]) - est_rhos[i-1] + est_lambdas[i])*share(p_star(est_rhos[i-1],est_lambdas[i]))*M
+				for i in 1:N-1
+					k = i+1
+					A = est_ff[k-1] + (p_star(est_rhos[k],est_lambdas[k]) - est_rhos[k] + est_lambdas[k])*share(p_star(est_rhos[k],est_lambdas[k]))*M - (p_star(est_rhos[k-1],est_lambdas[k]) - est_rhos[k-1] + est_lambdas[k])*share(p_star(est_rhos[k-1],est_lambdas[k]))*M
 					push!(est_ff,A)
 				end
-				return (est_rhos,est_ff,est_lambdas)=#
-				#return (rho_guess,lambda_guess)
-				#return (est_rhos,est_lambdas)
-				return solution
+				return (est_rhos,est_ff,est_lambdas)
 			end
 			
 			function obj_func(omega::Vector, N::Int, W::Matrix)
 				tic()
 				rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N)
-				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[2:end] - obs_ff[2:end])]'
+				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 				res = vec*W*vec'
 				toc()
 				return res[1]
@@ -461,11 +470,10 @@ for market in markets
 			N = length(obs_rhos)+1
 			W = eye(2*(N-1)- 1)
 			#W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-2)
-			x0 = [0.0, 5.0, 0.0, 0.0]
-			println(price_sched_calc(x0,4))
-			break
+			x0 = [5.0,15.0, log(2.0), log(3.0)]
+			#println(price_sched_calc(x0,5))
 			g(x) = obj_func(x,N,W)
-			optim_res = optimize(g,x0,NelderMead(),OptimizationOptions(show_every = true, iterations = 3000))
+			optim_res = optimize(g,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500))
 			println(optim_res)
 			min_X = Optim.minimizer(optim_res)
 			println(min_X)

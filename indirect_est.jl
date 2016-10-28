@@ -185,17 +185,17 @@ for market in markets
 			end
 			# Defining parameters for linear approx to demand to give hot start to non-linear version.
 			# apporximating demand around observed product price
-			A = share(prod_price) - d_share(prod_price)*prod_price
-			B = d_share(prod_price)
+			LA = share(prod_price) - d_share(prod_price)*prod_price
+			LB = d_share(prod_price)
 			function Lshare(p)
-				return A + B*p
+				return LA + LB*p
 			end
-			Ld_share(p) = B
+			Ld_share(p) = LB
 			Ldd_share(p) = 0.0
 			Lddd_share(p) = 0.0
 
 			function Lp_star(rho, l)
-				return -A/(2.0*B) + (rho - l)/2.0
+				return -LA/(2.0*LB) + (rho - l)/2.0
 			end
 			function Ld_pstar_d_rho(rho,lambda)
 				return 0.5
@@ -242,24 +242,12 @@ for market in markets
 				est_pdf(x) = ForwardDiff.derivative(est_cdf,x)
 				d_est_pdf(x) = ForwardDiff.derivative(est_pdf,x)
 				=#
-
-
-				#= finding rho_0. rho_0 is such that the lowest type is indifferent about purchasing (entering the market)
-				For retailers, this equates to a 0-profit condition:
-				(p_star(rho_0,lambda_ub) - rho_0 - lambda_ub)*share(p_star(rho_0,lambda_ub)) = 0
-
-				function low_profit!(rho_0, lpvec)
-					u = p_star(rho_0,lambda_lb)
-					lpvec[1] = (u - rho_0 - lambda_lb)*share(u)
-				end
-				rho_0_sol = nlsolve(low_profit!,[12.0])
-				rho_0 = rho_0_sol.zero[1]
-				=#
+				
 				function urho(k::Integer)
-					return -A/B + lambda_ub + (c + A/B - lambda_ub)/(3-4*N)*(2 - 2*N - k)
+					return -LA/LB + lambda_ub + (c + LA/LB - lambda_ub)/(3-4*N)*(2 - 2*N - 2*k)
 				end
 				function ulambda(k::Integer)
-					return lambda_ub - (2*(c + A/B - lambda_ub))/(3-4*N)*(N - k)
+					return lambda_ub - (2*(c + LA/LB - lambda_ub))/(3-4*N)*(N - k)
 				end
 				rho_0 = urho(0)
 				#rho_0 = -A/B
@@ -438,12 +426,12 @@ for market in markets
 				end
 				rho_start = convert(Array{Float64,1},[urho(k) for k = 1:N-1])
 				lambda_start = convert(Array{Float64,1},[ulambda(k) for k = 1:N-1])	
-				innerx0 = [rho_start;lambda_start] + 0*randn(2*(N-1))
+				innerx0 = [rho_start;lambda_start]
 				#innerx0 = [1.0, 0.75, 0.5, 0.3, 0.6, 0.9] + 0*randn(2*(N-1))
 				# checking hessian and gradient
-					
-				#println(innerx0)
-				#=
+				#=	
+				println(innerx0)
+				
 				gtest1 = ones(2*(N-1))
 				gtest2 = ones(2*(N-1))
 				htest = ones(2*(N-1),2*(N-1))
@@ -462,8 +450,8 @@ for market in markets
 				println(htest)
 				solution = 1
 				return solution
-				=#
-				solution = optimize(Lw_profit,Lwfocs!,Lwhess!,innerx0,method=Newton(), show_trace = false, extended_trace = false, iterations = 1500, f_tol = 1e-64, g_tol = 1e-6)
+				=#	
+				solution = optimize(Lw_profit,Lwfocs!,Lwhess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 1500, f_tol = 1e-64, g_tol = 1e-6)
 				#println(solution)
 				est_rhos = [rho_0 ; Optim.minimizer(solution)[1:N-1]]
 				est_lambdas = [lambda_lb ; Optim.minimizer(solution)[N:end] ; lambda_ub]
@@ -746,7 +734,7 @@ for market in markets
 			N = length(obs_rhos)+1
 			W = eye(2*(N-1)- 1)
 			#W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-2)
-			x0 = [5.0,15.0, log(4.0), log(5.0)]
+			x0 = [0.0,15.0, log(2.0), log(2.0)]
 			hsrho,hsff,hslambda = Lprice_sched_calc(x0,4)
 			hs = [hsrho[2:end],hslambda[2:end-1]]
 			#println(Lprice_sched_calc(x0,4))

@@ -166,11 +166,20 @@ for market in markets
 				function gh!(p, gjvec)
 					gjvec[1] = -(p - rho + l)*dd_share(p)*M + 2.0*d_share(p)*M
 				end
-				poptim_res = optimize(g,rho-l,(rho-l)+20.0, method=Brent(), show_trace = false)
+				poptim_res = optimize(g,0.0,100, method=Brent(), show_trace = false, extended_trace = false)
 				#poptim_res = optimize(uLg,focs!,ux0,BFGS(),OptimizationOptions(show_every = true, extended_trace = true, iterations = 1500, g_tol = 1e-6))
 				return Optim.minimizer(poptim_res)[1]
 			end
+			### Roots pstar
 			
+			function p_star(rho,l)
+				function g(p)
+					return (p - rho + l)*d_share(p)*M + share(p)*M
+				end
+				res = fzero(g,(rho-l), 100)
+				return res
+			end
+		
 			function d_pstar_d_rho(rho,lambda) # note that this is the same as d_pstar_d_lambda
 				u = p_star(rho,lambda)
 				res = d_share(u) ./ (dd_share(u)*(u - rho + lambda) + 2*d_share(u))
@@ -726,8 +735,7 @@ for market in markets
 				println(htest)
 				solution = 1
 				=#
-				println(params)
-				solution = optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 1500, f_tol = 1e-32, g_tol = 1e-4)
+				solution = optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 500, f_tol = 1e-32, g_tol = 1e-4)
 				est_rhos = [rho_0 ; Optim.minimizer(solution)[1:N-1]]
 				est_lambdas = [lambda_lb ; Optim.minimizer(solution)[N:end] ; lambda_ub]
 				#println(solution)
@@ -748,6 +756,14 @@ for market in markets
 				hs = [hsrho[2:end],hslambda[2:end-1]]
 				rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N; hot_start = hs)
 				#rho_hat,ff_hat,lambda_hat = Lprice_sched_calc(omega,N)
+				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
+				res = vec*W*vec'
+				toc()
+				return res[1]
+			end
+			function Lobj_func(omega::Vector, N::Int, W::Matrix)
+				tic()
+				rho_hat,ff_hat,lambda_hat = Lprice_sched_calc(omega,N)
 				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 				res = vec*W*vec'
 				toc()
@@ -828,13 +844,13 @@ for market in markets
 			#W = eye(2*(N-1)- 1)
 			# testing recovery of params with fake data
 			x0 = [3.0; 12.0; log(2.0); log(2.0)]
-			#hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
-			#hs = [hsrho[2:end],hslambda[2:end-1]]
-			#nlrho,nlff,nllamb = price_sched_calc(x0,N, hot_start = hs)
-			#obs_rhos = nlrho[2:end]
-			#obs_ff = [0.0;nlff[3:end]]
+			hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
+			hs = [hsrho[2:end],hslambda[2:end-1]]
+			nlrho,nlff,nllamb = price_sched_calc(x0,N, hot_start = hs)
+			obs_rhos = nlrho[2:end]
+			obs_ff = [0.0;nlff[3:end]]
 			
-			ux0 = [3.0,15.0]
+			#ux0 = [3.0,15.0]
 			W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-3)
 			# checking Objective func gradient
 			#eps = zeros(2)
@@ -845,26 +861,39 @@ for market in markets
 			#println(jtest)
 			
 			# testing hot start
+			#x0 = [0.0; 2.0; log(1.0); log(1.0)]
 			#hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
 			#hs = [hsrho[2:end],hslambda[2:end-1]]
 			#println(Lprice_sched_calc(x0,5))
 			#println(price_sched_calc(x0,4))
 			#println(price_sched_calc(x0,N; hot_start = hs))
-		
+			
 			# Optimizing uniform linear model	
-			uLg(x) = uLobj_func(x,N,W)
-			focs!(x,vec) = uLobj_foc!(x,vec,N,W)
-			optim_res = optimize(uLg,focs!,ux0,BFGS(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
-			println(optim_res)
-			min_X = Optim.minimizer(optim_res)
-			break
+			#uLg(x) = uLobj_func(x,N,W)
+			#focs!(x,vec) = uLobj_foc!(x,vec,N,W)
+			#optim_res = optimize(uLg,focs!,ux0,BFGS(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
+			#println(optim_res)
+			#min_X = Optim.minimizer(optim_res)
+			
 			x0 = [2.0; 10.0; log(1.0); log(1.0)]
 			outerg(x) = obj_func(x,N,W)
-			println(outerg(x0))
-			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = true, extended_trace = true, iterations = 1500, g_tol = 1e-6))
+			
+			# grid search
+			#=tic()
+			for i = 0.0:10.0
+				for j = 2.0:2.0:20.0
+					x0 = [i;j;0.0;0.0]
+					println(x0)
+					println(outerg(x0))
+				end
+			end
+			toc() =#
+			x0 = [3.0; 10.0; log(1.0); log(1.0)]
+			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
 			println(optim_res)
 			min_X = Optim.minimizer(optim_res)
 			println(min_X)
+			break
 			hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
 			hs = [hsrho[2:end],hslambda[2:end-1]]
 			println(price_sched_calc(min_X,N, hot_start = hs))

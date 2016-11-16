@@ -63,8 +63,8 @@ function sparse_int(f::Function, a::Number, b::Number)
 	return dot(f_evals, weights)*(b-a)::Float64
 end
 
-#markets = convert(Vector, levels(df[:,:mkt]))
-markets = [178]
+markets = convert(Vector, levels(df[:,:mkt]))
+#markets = [178]
 
 csvfile = open("indirect_est.csv", "w")
 write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
@@ -901,7 +901,7 @@ A
 			fit_ps = price_sched_calc(min_X,N, hot_start = hs)
 
 			outtuple = (product,market,min_X[1], max_mc, min_X[2], min_X[3], fit_ps)
-			write(csvfile,join(outtuple,","),"\n")
+			write(csvfile,join(outtuple,"|"),"\n")
 
 		else
 			println("Product has no matching price data.")

@@ -63,12 +63,15 @@ function sparse_int(f::Function, a::Number, b::Number)
 	return dot(f_evals, weights)*(b-a)::Float64
 end
 
-#markets = convert(Vector
+#markets = convert(Vector, levels(df[:,:mkt]))
 markets = [178]
 
+csvfile = open("indirect_est.csv", "w")
+write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
+
 for market in markets
-	#products = levels(df[df[:mkt] .== market, :product])
-	products = [650]
+	products = levels(df[df[:mkt] .== market, :product])
+	#products = [650]
 	
 	for product in products
 		println("Working with Market: $market, Product: $product")
@@ -83,7 +86,6 @@ for market in markets
 		matched_upc = (df[prod_bool, :_merge_purchases][1] == 3)
 
 		if matched_upc == true # Only need to work with matched products. No price sched for non-matched.
-			tic()
 			println("Product has matched price data. Evaluating cutoff prices.")
 			#Defining some constants for use in the share function
 			xb_prod = (prod_chars[:,2:end]*coef_vec[:,2:end]')[1] + df[prod_bool,:xi][1] # scalar
@@ -752,44 +754,34 @@ A
 			end
 			
 			function obj_func(omega::Vector, N::Int, W::Matrix)
-				tic()
-				#println(omega)
 				hsrho,hsff,hslambda = Lprice_sched_calc(omega,N)
 				hs = [hsrho[2:end],hslambda[2:end-1]]
 				rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N; hot_start = hs)
 				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 				res = vec*W*vec'
-				toc()
 				return res[1]
 			end
 			function Lobj_func(omega::Vector, N::Int, W::Matrix)
-				tic()
-				#println(omega)
 				rho_hat,ff_hat,lambda_hat = Lprice_sched_calc(omega,N)
 				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 				res = vec*W*vec'
-				toc()
 				return res[1]
 			end
 
 			function uobj_func(omega::Vector, N::Int, W::Matrix)
 				# Omega should just be 2 long
-				tic()
 				hsrho,hsff,hslambda = Lprice_sched_calc([omega;log(1.0);log(1.0)],N)
 				hs = [hsrho[2:end],hslambda[2:end-1]]
 				rho_hat,ff_hat,lambda_hat = price_sched_calc([omega;log(1.0);log(1.0)],N)
 				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 				res = vec*W*vec'
-				toc()
 				return res[1]
 			end
 			function uLobj_func(omega::Vector, N::Int, W::Matrix)
 				# Omega should just be 2 long
-				tic()
 				rho_hat,ff_hat,lambda_hat = Lprice_sched_calc([omega;log(1.0);log(1.0)],N)
 				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 				res = vec*W*vec'
-				toc()
 				return res[1]
 			end
 			function uLobj_foc!(omega::Vector,obj_foc_mat,N::Integer,W::Matrix)
@@ -881,7 +873,6 @@ A
 			#min_X = Optim.minimizer(optim_res)
 			
 			outerg(x) = obj_func(x,N,W)
-			tic()
 				
 			# grid search
 			#grid_points = [[i,j,0.0,0.0] for i = 0.0:10.0, j = 2.0:2.0:20.0]
@@ -905,14 +896,13 @@ A
 			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-5))
 			println(optim_res)
 			min_X = Optim.minimizer(optim_res)
-			println(min_X)
-			toc()
-			hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
+			hsrho,hsff,hslambda = Lprice_sched_calc(min_X,N)
 			hs = [hsrho[2:end],hslambda[2:end-1]]
-			println(price_sched_calc(min_X,N, hot_start = hs))
-			println(obs_rhos)
-			println(obs_ff)
-			toc()
+			fit_ps = price_sched_calc(min_X,N, hot_start = hs)
+
+			outtuple = (product,market,min_X[1], max_mc, min_X[2], min_X[3], fit_ps)
+			write(csvfile,join(outtuple,","),"\n")
+
 		else
 			println("Product has no matching price data.")
 		end

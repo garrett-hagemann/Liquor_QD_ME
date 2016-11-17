@@ -45,7 +45,7 @@ function burr_cdf(x,gamma)
 	return 1 - (1-x)^(1/gamma)
 end
 
-function sparse_int(f::Function, a::Number, b::Number)
+@everywhere function sparse_int(f::Function, a::Number, b::Number)
 	#= Implements sparse grid quadrature from sparsegrids.de
 	This implements the 1 dimensional rule that is exact for
 	polynomials up to order 25.
@@ -69,7 +69,7 @@ markets = convert(Vector, levels(df[:,:mkt]))
 csvfile = open("indirect_est.csv", "w")
 write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
 
-for market in markets
+@sync @parallel for market in markets
 	products = levels(df[df[:mkt] .== market, :product])
 	#products = [650]
 	
@@ -535,7 +535,7 @@ for market in markets
 				rho_0_sol = nlsolve(low_profit!,[12.0])
 				rho_0 = rho_0_sol.zero[1]
 				=#
-				rho_0 = 30
+				rho_0 = obs_rhos[1]*2.0
 				##### Optimizer Approach
 				function w_profit(theta)
 					lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
@@ -755,7 +755,7 @@ A
 			
 			function obj_func(omega::Vector, N::Int, W::Matrix)
 				hsrho,hsff,hslambda = Lprice_sched_calc(omega,N)
-				hs = [hsrho[2:end],hslambda[2:end-1]]
+				hs = [hsrho[2:end];hslambda[2:end-1]]
 				rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N; hot_start = hs)
 				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 				res = vec*W*vec'

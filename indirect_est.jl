@@ -45,7 +45,7 @@ function burr_cdf(x,gamma)
 	return 1 - (1-x)^(1/gamma)
 end
 
-@everywhere function sparse_int(f::Function, a::Number, b::Number)
+function sparse_int(f::Function, a::Number, b::Number)
 	#= Implements sparse grid quadrature from sparsegrids.de
 	This implements the 1 dimensional rule that is exact for
 	polynomials up to order 25.
@@ -69,7 +69,7 @@ markets = convert(Vector, levels(df[:,:mkt]))
 csvfile = open("indirect_est.csv", "w")
 write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
 
-@sync @parallel for market in markets
+for market in markets
 	products = levels(df[df[:mkt] .== market, :product])
 	#products = [650]
 	

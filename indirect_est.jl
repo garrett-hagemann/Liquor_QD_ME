@@ -63,15 +63,15 @@ function sparse_int(f::Function, a::Number, b::Number)
 	return dot(f_evals, weights)*(b-a)::Float64
 end
 
-markets = convert(Vector, levels(df[:,:mkt]))
-#markets = [178]
+#markets = convert(Vector, levels(df[:,:mkt]))
+markets = [178]
 
 csvfile = open("indirect_est.csv", "w")
 write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
 
 for market in markets
-	products = levels(df[df[:mkt] .== market, :product])
-	#products = [650]
+	#products = levels(df[df[:mkt] .== market, :product])
+	products = [650]
 	
 	for product in products
 		println("Working with Market: $market, Product: $product")
@@ -86,7 +86,7 @@ for market in markets
 		matched_upc = (df[prod_bool, :_merge_purchases][1] == 3)
 
 		if matched_upc == true # Only need to work with matched products. No price sched for non-matched.
-			println("Product has matched price data. Evaluating cutoff prices.")
+			println("Product has matched price data.")
 			#Defining some constants for use in the share function
 			xb_prod = (prod_chars[:,2:end]*coef_vec[:,2:end]')[1] + df[prod_bool,:xi][1] # scalar
 			
@@ -113,8 +113,8 @@ for market in markets
 			obs_cutoff_q = dropna(convert(DataArray,df[prod_bool, cutoff_q_list])'[:,1]) #same as above
 			obs_ff = [0.0] # first fixed fee is by definition
 			
-			max_mc = maximum(obs_rhos)*1.50 # 50% buffer
-			
+			#max_mc = copy(maximum(obs_rhos)*1.50) # 50% buffer
+			max_mc = 15.0
 			# calculating series of A (intercepts of piecewise linear price schedules
 			# calculating tariff
 			for k = 2:length(obs_cutoff_q)
@@ -167,11 +167,11 @@ for market in markets
 				function gh!(p, gjvec)
 					gjvec[1] = -((p - rho + l)*dd_share(p)*M + 2.0*d_share(p)*M)
 				end
-				poptim_res = optimize(g,0.0,100.0, method=Brent(), show_trace = false, extended_trace = false, rel_tol = 1e-1, abs_tol = 1e-1)
+				poptim_res = optimize(g,0.0,100.0, method=Brent(), show_trace = false, extended_trace = false, rel_tol = 1e-6, abs_tol = 1e-6)
 				#poptim_res = optimize(uLg,focs!,ux0,BFGS(),OptimizationOptions(show_every = true, extended_trace = true, iterations = 1500, g_tol = 1e-6))
 				return Optim.minimizer(poptim_res)[1]
 			end
-			
+
 			### Roots pstar
 			#=
 			function p_star(rho::Float64,l::Float64)
@@ -480,7 +480,7 @@ for market in markets
 				solution = 1
 				return solution
 				=#	
-				solution = optimize(Lw_profit,Lwfocs!,Lwhess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 1500, f_tol = 1e-64, g_tol = 1e-2)
+				solution = optimize(Lw_profit,Lwfocs!,Lwhess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 1500, f_tol = 1e-64, g_tol = 1e-6)
 				#println(solution)
 				est_rhos = [rho_0 ; Optim.minimizer(solution)[1:N-1]]
 				est_lambdas = [lambda_lb ; Optim.minimizer(solution)[N:end] ; lambda_ub]
@@ -535,7 +535,8 @@ for market in markets
 				rho_0_sol = nlsolve(low_profit!,[12.0])
 				rho_0 = rho_0_sol.zero[1]
 				=#
-				rho_0 = obs_rhos[1]*2.0
+				#rho_0 = obs_rhos[1]*2.0
+				rho_0 = 30.0
 				##### Optimizer Approach
 				function w_profit(theta)
 					lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
@@ -738,7 +739,7 @@ A
 				println(htest)
 				solution = 1
 				=#
-				solution = optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 500, f_tol = 1e-32, g_tol = 1e-2)
+				solution = optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 500, f_tol = 1e-32, g_tol = 1e-6)
 				est_rhos = [rho_0 ; Optim.minimizer(solution)[1:N-1]]
 				est_lambdas = [lambda_lb ; Optim.minimizer(solution)[N:end] ; lambda_ub]
 				#println(solution)
@@ -754,11 +755,13 @@ A
 			end
 			
 			function obj_func(omega::Vector, N::Int, W::Matrix)
+				tic()
 				hsrho,hsff,hslambda = Lprice_sched_calc(omega,N)
 				hs = [hsrho[2:end];hslambda[2:end-1]]
 				rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N; hot_start = hs)
 				vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 				res = vec*W*vec'
+				toc()
 				return res[1]
 			end
 			function Lobj_func(omega::Vector, N::Int, W::Matrix)
@@ -836,17 +839,16 @@ A
 
 			N = length(obs_rhos)+1
 			#W = eye(2*(N-1)- 1)
-			#=
+			
 			# testing recovery of params with fake data
 			println("Testing recovery of parameters with 'fake' data")
-			#x0 = [3.0; 12.0; log(2.0); log(2.0)]
 			x0 = [3.0; log(2.0); log(2.0)]
 			hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
 			hs = [hsrho[2:end],hslambda[2:end-1]]
 			nlrho,nlff,nllamb = price_sched_calc(x0,N, hot_start = hs)
 			obs_rhos = nlrho[2:end]
 			obs_ff = [0.0;nlff[3:end]]
-			=#
+			
 			#ux0 = [3.0,15.0]
 			W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-3)
 			# checking Objective func gradient
@@ -876,7 +878,7 @@ A
 				
 			# grid search
 			#grid_points = [[i,j,0.0,0.0] for i = 0.0:10.0, j = 2.0:2.0:20.0]
-			grid_points = [[i,k,l] for i = 0.0:2.0:40.0,  k = 0.0:1.0:2.0, l=0.0:1.0:2.0]
+			grid_points = [[i,k,l] for i = 0.0:2.0:20.0,  k = 0.0:1.0:2.0, l=0.0:1.0:2.0]
 			grid_evals = map(outerg,grid_points)
 			min_ind = indmin(grid_evals)
 			x0 = grid_points[min_ind]
@@ -893,7 +895,7 @@ A
 			=#
 			outerg(x) = obj_func(x,N,W)
 			#x0 = [2.0; 11.0; log(1.0); log(1.0)]
-			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-5))
+			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
 			println(optim_res)
 			min_X = Optim.minimizer(optim_res)
 			hsrho,hsff,hslambda = Lprice_sched_calc(min_X,N)
@@ -902,9 +904,12 @@ A
 
 			outtuple = (product,market,min_X[1], max_mc, min_X[2], min_X[3], fit_ps)
 			write(csvfile,join(outtuple,"|"),"\n")
+			flush(csvfile) # ensures write is written now, so if loop fails, still get some
 
 		else
 			println("Product has no matching price data.")
 		end
 	end
 end
+
+close(csvfile)

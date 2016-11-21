@@ -830,7 +830,7 @@ A
 				vec = [(foc_rho_hat[2:end] - obs_rhos) ; (foc_ff_hat[3:end] - obs_ff[2:end])]'
 				res = (2.0*temp_mat'*W*vec')
 				for i in 1:size(res)[1] # rows
-					for j in 1:size(res)[2] # columns
+					for j in 1:size(res)[2] # column
 						obj_foc_mat[i,j] = res[i,j]
 					end
 				end
@@ -878,7 +878,7 @@ A
 				
 			# grid search
 			#grid_points = [[i,j,0.0,0.0] for i = 0.0:10.0, j = 2.0:2.0:20.0]
-			grid_points = [[i,k,l] for i = 0.0:2.0:20.0,  k = 0.0:1.0:2.0, l=0.0:1.0:2.0]
+			grid_points = [[i,k,l] for i = linspace(0,40,20),  k = linspace(0,2,3), l=linspace(0,2,3)]
 			grid_evals = map(outerg,grid_points)
 			min_ind = indmin(grid_evals)
 			x0 = grid_points[min_ind]
@@ -895,7 +895,7 @@ A
 			=#
 			outerg(x) = obj_func(x,N,W)
 			#x0 = [2.0; 11.0; log(1.0); log(1.0)]
-			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
+			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-7))
 			println(optim_res)
 			min_X = Optim.minimizer(optim_res)
 			hsrho,hsff,hslambda = Lprice_sched_calc(min_X,N)

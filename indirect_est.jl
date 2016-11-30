@@ -45,7 +45,7 @@ function burr_cdf(x,gamma)
 	return 1 - (1-x)^(1/gamma)
 end
 
-function sparse_int(f::Function, a::Number, b::Number)
+@everywhere function sparse_int(f::Function, a::Number, b::Number)
 	#= Implements sparse grid quadrature from sparsegrids.de
 	This implements the 1 dimensional rule that is exact for
 	polynomials up to order 25.
@@ -63,15 +63,16 @@ function sparse_int(f::Function, a::Number, b::Number)
 	return dot(f_evals, weights)*(b-a)::Float64
 end
 
-#markets = convert(Vector, levels(df[:,:mkt]))
-markets = [178]
+markets = convert(Vector, levels(df[:,:mkt]))
+#markets = [178]
 
-csvfile = open("indirect_est.csv", "w")
+@everywhere csvfile = open("indirect_est.csv", "w")
 write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
+flush(csvfile)
 
-for market in markets
-	#products = levels(df[df[:mkt] .== market, :product])
-	products = [650]
+@sync @parallel for market in markets
+	products = levels(df[df[:mkt] .== market, :product])
+	#products = [650]
 	
 	for product in products
 		println("Working with Market: $market, Product: $product")
@@ -841,6 +842,7 @@ A
 			#W = eye(2*(N-1)- 1)
 			
 			# testing recovery of params with fake data
+			#=
 			println("Testing recovery of parameters with 'fake' data")
 			x0 = [3.0; log(2.0); log(2.0)]
 			hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
@@ -848,7 +850,7 @@ A
 			nlrho,nlff,nllamb = price_sched_calc(x0,N, hot_start = hs)
 			obs_rhos = nlrho[2:end]
 			obs_ff = [0.0;nlff[3:end]]
-			
+			=#
 			#ux0 = [3.0,15.0]
 			W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-3)
 			# checking Objective func gradient
@@ -895,11 +897,11 @@ A
 			=#
 			outerg(x) = obj_func(x,N,W)
 			#x0 = [2.0; 11.0; log(1.0); log(1.0)]
-			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-7))
+			optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
 			println(optim_res)
 			min_X = Optim.minimizer(optim_res)
 			hsrho,hsff,hslambda = Lprice_sched_calc(min_X,N)
-			hs = [hsrho[2:end],hslambda[2:end-1]]
+			hs = [hsrho[2:end];hslambda[2:end-1]]
 			fit_ps = price_sched_calc(min_X,N, hot_start = hs)
 
 			outtuple = (product,market,min_X[1], max_mc, min_X[2], min_X[3], fit_ps)

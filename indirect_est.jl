@@ -1,4 +1,4 @@
-@everywhere using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Distributions, Optim, Interpolations, LineSearches
+@everywhere using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Distributions, Optim, NLopt, JuMP
 
 #= goofy conversion magic =#
 import Base.convert
@@ -160,95 +160,58 @@ end
 		=#	
 		### Optimizer pstar
 			
-		function p_star(rho::Float64,l::Float64)
-			function g(p::Float64) # retailer profit
-				return -((p - rho + l)*share(p)*M)[1] # Ignores fixed cost as it just shifts problem
+		function p_star(rho)
+			function g(p::Float64) # retailer profit. Note that optimal p is independent of M and type
+				return -((p - rho)*share(p))[1] # Ignores fixed cost as it just shifts problem. Need the indexing for some reason in optimize
 			end
 			function gj!(p,gvec)
-				gvec[1] =  -((p - rho + l)*d_share(p)*M + share(p)*M)
+				gvec[1] =  -((p - rho)*d_share(p) + share(p))
 			end
 			function gh!(p, gjvec)
-				gjvec[1] = -((p - rho + l)*dd_share(p)*M + 2.0*d_share(p)*M)
+				gjvec[1] = -((p - rho)*dd_share(p) + 2.0*d_share(p))
 			end
-			poptim_res = optimize(g,0.0,100.0, method=Brent(), show_trace = false, extended_trace = false, rel_tol = 1e-6, abs_tol = 1e-6)
+			poptim_res = Optim.optimize(g,0.0,100.0, method=Brent(), show_trace = false, extended_trace = false, rel_tol = 1e-6, abs_tol = 1e-6)
 			#poptim_res = optimize(uLg,focs!,ux0,BFGS(),OptimizationOptions(show_every = true, extended_trace = true, iterations = 1500, g_tol = 1e-6))
 			return Optim.minimizer(poptim_res)[1]
 		end
 
-		### Roots pstar
-		#=
-		function p_star(rho::Float64,l::Float64)
-			function g(p)
-				return (p - rho + l)*d_share(p) + share(p)
-			end
-			res = fzero(g,(rho-l))
-			return res
-		end
-		=#
-		function d_pstar_d_rho(rho::Float64,lambda::Float64) # note that this is the same as d_pstar_d_lambda
-			u = p_star(rho,lambda)
-			res = d_share(u) ./ (dd_share(u)*(u - rho + lambda) + 2*d_share(u))
+		function d_pstar_d_rho(rho) 
+			u = p_star(rho)
+			res = d_share(u) ./ (dd_share(u)*(u - rho) + 2*d_share(u))
 			return res[1]
 		end
-		function d_pstar_d_lambda(rho::Float64,lambda::Float64) # see above
-			return -d_pstar_d_rho(rho,lambda)
-		end
-		function d2_pstar_d2_rho(rho::Float64,lambda::Float64)
-			u = p_star(rho,lambda)
-			num1 = (dd_share(u)*(u - rho + lambda) + 2*d_share(u))*dd_share(u)*d_pstar_d_rho(rho,lambda)
-			num2 = d_share(u)*(dd_share(u)*(d_pstar_d_rho(rho,lambda) - 1) + ((u - rho + lambda)*ddd_share(u) + 2*dd_share(u))*d_pstar_d_rho(rho,lambda))
-			den = dd_share(u)*(u - rho + lambda) + 2*d_share(u)
+		function d2_pstar_d2_rho(rho)
+			u = p_star(rho)
+			num1 = (dd_share(u)*(u - rho) + 2*d_share(u))*dd_share(u)*d_pstar_d_rho(rho)
+			num2 = d_share(u)*(dd_share(u)*(d_pstar_d_rho(rho) - 1) + ((u - rho)*ddd_share(u) + 2*dd_share(u))*d_pstar_d_rho(rho))
+			den = dd_share(u)*(u - rho) + 2*d_share(u)
 			res = (num1 - num2)/(den^2)
 			return res
-		end
-		function d2_pstar_d2_lambda(rho::Float64,lambda::Float64)
-			u = p_star(rho,lambda)
-			num1 = (dd_share(u)*(u - rho + lambda) + 2*d_share(u))*dd_share(u)*d_pstar_d_lambda(rho,lambda)
-			num2 = d_share(u)*(dd_share(u)*(d_pstar_d_lambda(rho,lambda) + 1) + ((u - rho + lambda)*ddd_share(u) + 2*dd_share(u))*d_pstar_d_lambda(rho,lambda))
-			den = dd_share(u)*(u - rho + lambda) + 2*d_share(u)
-			res = (-num1 + num2)/(den^2)
-			return res
-		end
-		function d2_pstar_d_rho_d_lambda(rho::Float64,lambda::Float64) # cross derivative
-			return -d2_pstar_d2_lambda(rho,lambda)
-		end
-		function d2_pstar_d_lambda_d_rho(rho::Float64,lambda::Float64)
-			return -d2_pstar_d2_rho(rho,lambda)
 		end
 		# Defining parameters for linear approx to demand to give hot start to non-linear version.
 		# apporximating demand around observed product price
 		LA = share(prod_price) - d_share(prod_price)*prod_price
 		LB = d_share(prod_price)
-		function Lshare(p::Float64)
+		function Lshare(p)
 			return LA + LB*p
 		end
 		Ld_share(p) = LB
 		Ldd_share(p) = 0.0
 		Lddd_share(p) = 0.0
 
-		function Lp_star(rho, l)
-			return -LA/(2.0*LB) + (rho - l)/2.0
+		function Lp_star(rho)
+			return -LA/(2.0*LB) + (rho)/2.0
 		end
-		function Ld_pstar_d_rho(rho,lambda)
+		function Ld_pstar_d_rho(rho)
 			return 0.5
 		end
-		function Ld_pstar_d_lambda(rho,lambda)
-			return -0.5
-		end
-		function Ld2_pstar_d2_rho(rho,lambda)
-			return 0.0
-		end
-		function Ld2_pstar_d2_lambda(rho,lambda)
-			return 0.0
-		end
-		function Ld2_pstar_d_rho_d_lambda(rho,lambda)
-			return 0.0
-		end
-		function Ld2_pstar_d_lambda_d_rho(rho,lambda)
+		function Ld2_pstar_d2_rho(rho)
 			return 0.0
 		end
 
 		function Lprice_sched_calc(params::Array{Float64,1},N::Int)
+			constrained = 1 # solving problem with A1 constrained to 0
+
 			# params are the params of the wholesaler's problem we're trying to
 			# estimate. 
 
@@ -261,199 +224,74 @@ end
 			#distribution parameters
 			a = 1.0 # exp(params[2]) #
 			b = exp(params[2]) # 
-			lambda_lb = -max_mc
-			lambda_ub = max_mc
+			lambda_lb = 0.0
+			lambda_ub = 1.0
 				
-			est_cdf(x) = cdf(Beta(a,b),(x-lambda_lb)/(lambda_ub - lambda_lb))
-			est_pdf(x) = pdf(Beta(a,b),(x-lambda_lb)/(lambda_ub - lambda_lb))/(lambda_ub - lambda_lb)
-			d_est_pdf(x) = ((1/(lambda_ub - lambda_lb))^2)*((a + b - 2)*(x-lambda_lb)/(lambda_ub - lambda_lb) - (a - 1))/(((x-lambda_lb)/(lambda_ub - lambda_lb) -1)*(x-lambda_lb)/(lambda_ub - lambda_lb))*pdf(Beta(a,b),(x-lambda_lb)/(lambda_ub - lambda_lb))
-			
-			#=
-			#= below formulation of th Kumaraswarmy distribution isn't exactly right. Should only be defined on (0,1) and pdf is 0 outside that. Programming that in makes it act funny =#		
-			est_cdf(x) = 1.0 - (1.0-(x/max_mc)^a)^b
-			est_pdf(x) = ForwardDiff.derivative(est_cdf,x)
-			d_est_pdf(x) = ForwardDiff.derivative(est_pdf,x)
-			=#
-			
-			function urho(k::Integer)
-				return -LA/LB + lambda_ub + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1 - N - k)
+			est_cdf(x) = cdf(Beta(a,b),x)
+			est_pdf(x) = pdf(Beta(a,b),x)
+		
+			if (constrained == 1)	
+				function urho(k::Integer)
+					return -LA/LB + (LA + LB*c)/(2*LB)*(2*k - 1)/(N-1)
+				end
+				function ulambda(k::Integer)
+					return (k-1)/(N-1)
+				end
+				rho_0 = urho(0)
 			end
-			function ulambda(k::Integer)
-				return lambda_ub - (2*(c + LA/LB - lambda_ub))/(3-4*N)*(N - k)
-			end
-			rho_0 = urho(0)
-			#rho_0 = max_rho
 			##### Optimizer Approach
-			function Lw_profit(theta)
+			function Lw_profit(params...)
+				theta = collect(params)
 				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
 				rho_vec = [rho_0 ; theta[1:N-1]]
 				profit = 0.0
 				for i = 1:N-1
 					k = i+1 # dealing with indexing
-					f(l) =  ((rho_vec[k] - c)*Lshare(Lp_star(rho_vec[k],l))*M)*est_pdf(l)
+					f(l) =  l*est_pdf(l)
 					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
 					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = Lp_star(rho_vec[k],lambda_vec[k])
-					ps2 = Lp_star(rho_vec[k-1],lambda_vec[k])
-					inc = int + (1-est_cdf(lambda_vec[k]))*((ps1 - rho_vec[k] + lambda_vec[k])*Lshare(ps1)*M - (ps2 - rho_vec[k-1] + lambda_vec[k])*Lshare(ps2)*M)
+					ps1 = Lp_star(rho_vec[k])
+					ps2 = Lp_star(rho_vec[k-1])
+					inc = ((rho_vec[k] - c)*M*Lshare(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*Lshare(ps1)*M - (ps2 - rho_vec[k-1])*Lshare(ps2)*M)
 					profit = profit + inc
 				end
 				return -profit
 			end
-			function Lwfocs!(theta::Vector, wfocs_vec)
+			function Lwfocs!(wfocs_vec,params...)
+				theta = collect(params)
 				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
 				rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
 				# Calculating FOCs
 				for i in 1:N-1 
 					k = i+1 # dealing with the increment in indexing and making code look more like notation
 					#calculating integral for rho FOC
-					f(l) =  ((rho_vec[k] - c)*Ld_share(Lp_star(rho_vec[k],l))*M*Ld_pstar_d_rho(rho_vec[k],l) + Lshare(Lp_star(rho_vec[k],l))*M)*est_pdf(l)
+					f(l) = l*est_pdf(l)
 					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
 					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = Lp_star(rho_vec[k],lambda_vec[k])
-					ps2 = Lp_star(rho_vec[k-1],lambda_vec[k])
-					ps3 = Lp_star(rho_vec[k],lambda_vec[k+1])
+					ps1 = Lp_star(rho_vec[k])
+					ps2 = Lp_star(rho_vec[k-1])
 					#rho FOC
-					if i == N-1
-						term1 = (ps1 - rho_vec[k] + lambda_vec[k])*Ld_share(ps1)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k]) + Lshare(ps1)*M*(Ld_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)
-						
-						res = int + (1-est_cdf(lambda_vec[k]))*term1
+						term1 = ((rho_vec[k] - c)*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1))*int
+						term2 = ((ps1 - rho_vec[k])*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+						term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+						res = term1 + term2*term3
 						wfocs_vec[i] = -res
-					else
-						term1 = (ps1 - rho_vec[k] + lambda_vec[k])*Ld_share(ps1)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k]) + Lshare(ps1)*M*(Ld_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)
-						term2 = (ps3 - rho_vec[k] + lambda_vec[k+1])*Ld_share(ps3)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k+1]) + Lshare(ps3)*M*(Ld_pstar_d_rho(rho_vec[k],lambda_vec[k+1]) - 1)
-						
-						res = int + (1-est_cdf(lambda_vec[k]))*term1 - (1-est_cdf(lambda_vec[k+1]))*term2
-						wfocs_vec[i] = -res
-					end
 					# lambda FOC
 					if i == 1
-						term1 = (rho_vec[k] - c)*Lshare(ps1)*M*est_pdf(lambda_vec[k])
-						term2a = (ps1 - rho_vec[k] + lambda_vec[k])*Ld_share(ps1)*M*Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-						term2b = Lshare(ps1)*M*(Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + 1)
-						term2c = (ps2 - rho_vec[k-1] + lambda_vec[k])*Ld_share(ps2)*M*Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-						term2d = Lshare(ps2)*M*(Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)
-						term3a = (ps1 - rho_vec[k] + lambda_vec[k])*Lshare(ps1)*M
-						term3b = (ps2 - rho_vec[k-1] + lambda_vec[k])*Lshare(ps2)*M
-						res = -term1 + (1-est_cdf(lambda_vec[k]))*(term2a + term2b - term2c - term2d) - est_pdf(lambda_vec[k])*(term3a - term3b)
+						term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+						term2 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
+						term3 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+						res = term1 + term2*term3
 						wfocs_vec[i+N-1] = -res
 					else
-						term0 = (rho_vec[k-1] - c)*Lshare(ps2)*M
-						term1 = (rho_vec[k] - c)*Lshare(ps1)*M
-						term2a = (ps1 - rho_vec[k] + lambda_vec[k])*Ld_share(ps1)*M*Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-						term2b = Lshare(ps1)*M*(Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])+1)
-						term2c = (ps2 - rho_vec[k-1] + lambda_vec[k])*Ld_share(ps2)*M*Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-						term2d = Lshare(ps2)*M*(Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)
-						term3a = (ps1 - rho_vec[k] + lambda_vec[k])*Lshare(ps1)*M
-						term3b = (ps2 - rho_vec[k-1] + lambda_vec[k])*Lshare(ps2)*M
-						res = est_pdf(lambda_vec[k])*(term0 - term1) + (1-est_cdf(lambda_vec[k]))*(term2a + term2b - term2c - term2d) - est_pdf(lambda_vec[k])*(term3a - term3b)
+						term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+						term2 = ((rho_vec[k-1] - c)*M*Lshare(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+						term3 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
+						term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+						res = term1 + term2 + term3*term4
 						wfocs_vec[i+N-1] = -res
 					end
 					
-				end
-			end
-			function Lwhess!(theta::Vector, whess_mat)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]]
-				#rho rho part diagonal elements
-				for i = 1:N-1
-					k = i+1
-					f(l) = ((rho_vec[k] - c)*(Ld_share(Lp_star(rho_vec[k],l))*M*Ld2_pstar_d2_rho(rho_vec[k],l) + (Ld_pstar_d_rho(rho_vec[k],l)^2)*Ldd_share(Lp_star(rho_vec[k],l))*M) + 2*Ld_share(Lp_star(rho_vec[k],l))*M*Ld_pstar_d_rho(rho_vec[k],l))*est_pdf(l)
-					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
-					ps1 = Lp_star(rho_vec[k],lambda_vec[k])
-					ss1 = (ps1 - rho_vec[k] + lambda_vec[k])*(Ld_share(ps1)*M*Ld2_pstar_d2_rho(rho_vec[k],lambda_vec[k]) + (Ld_pstar_d_rho(rho_vec[k],lambda_vec[k])^2)*Ldd_share(ps1)*M)
-					ss2 = Ld_share(ps1)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k])*(Ld_pstar_d_rho(rho_vec[k],lambda_vec[k])-1)
-					ss3 = Lshare(ps1)*M*Ld2_pstar_d2_rho(rho_vec[k],lambda_vec[k])
-					ss4 = (Ld_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)*Ld_share(ps1)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k])
-					if i != N-1
-						ps2 = Lp_star(rho_vec[k],lambda_vec[k+1])
-						ss5 = (ps2 - rho_vec[k] + lambda_vec[k+1])*(Ld_share(ps2)*M*Ld2_pstar_d2_rho(rho_vec[k],lambda_vec[k+1]) + (Ld_pstar_d_rho(rho_vec[k],lambda_vec[k+1])^2)*Ldd_share(ps2)*M)
-						ss6 = Ld_share(ps2)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k+1])*(Ld_pstar_d_rho(rho_vec[k],lambda_vec[k+1])-1)
-						ss7 = Lshare(ps2)*M*Ld2_pstar_d2_rho(rho_vec[k],lambda_vec[k+1])
-						ss8 = (Ld_pstar_d_rho(rho_vec[k],lambda_vec[k+1]) - 1)*Ld_share(ps2)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k+1])
-						res = int + (1-est_cdf(lambda_vec[k]))*(ss1 + ss2 + ss3 + ss4) - (1-est_cdf(lambda_vec[k+1]))*(ss5 + ss6 + ss7 + ss8)
-						whess_mat[i,i] = -res	
-					else
-						res = int + (1-est_cdf(lambda_vec[k]))*(ss1 + ss2 + ss3 + ss4)
-						whess_mat[i,i] = -res
-					end
-				end
-				# rho rho and lambda lambda off diagonals
-				for i = 1:N-1
-					for j = 1:N-1
-						if j != i
-							whess_mat[i,j] = 0.0
-							whess_mat[i+N-1,j+N-1] = 0.0
-						end
-					end
-				end
-				#lambda lambda part diagonals
-				for i = 1:N-1
-					k = i+1
-					ps1 = Lp_star(rho_vec[k],lambda_vec[k])
-					ps2 = Lp_star(rho_vec[k-1],lambda_vec[k])
-					ss1 = (rho_vec[k] - c)*Ld_share(ps1)*M*Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-					ss2 = (rho_vec[k] - c)*Lshare(ps1)*M
-					ss3 = (ps1-rho_vec[k]+lambda_vec[k])*(Ld_share(ps1)*M*Ld2_pstar_d2_lambda(rho_vec[k],lambda_vec[k]) + (Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])^2)*Ldd_share(ps1)*M)
-					ss4 = Ld_share(ps1)*M*Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])*(Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])+1)
-					ss5 = Lshare(ps1)*M*Ld2_pstar_d2_lambda(rho_vec[k],lambda_vec[k])
-					ss6 = (Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + 1)*Ld_share(ps1)*M*Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-					ss7 = (ps2-rho_vec[k-1]+lambda_vec[k])*(Ld_share(ps2)*M*Ld2_pstar_d2_lambda(rho_vec[k-1],lambda_vec[k]) + (Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])^2)*Ldd_share(ps2)*M)
-					ss8 = Ld_share(ps2)*M*Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])*(Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])+1)
-					ss9 = Lshare(ps2)*M*Ld2_pstar_d2_lambda(rho_vec[k-1],lambda_vec[k])
-					ss10 = (Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)*Ld_share(ps2)*M*Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-					ss11 = (ps1 - rho_vec[k] + lambda_vec[k])*Ld_share(ps1)*M*Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-					ss12 = Lshare(ps1)*M*(Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + 1)
-					ss13 = (ps2 - rho_vec[k-1] + lambda_vec[k])*Ld_share(ps2)*M*Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-					ss14 = Lshare(ps2)*M*(Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)
-					ss15 = (ps1 - rho_vec[k] + lambda_vec[k])*Lshare(ps1)*M
-					ss16 = (ps2 - rho_vec[k-1] + lambda_vec[k])*Lshare(ps2)*M
-					ss17 = (rho_vec[k-1] - c)*Ld_share(ps2)*M*Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-					ss18 = (rho_vec[k-1] - c)*Lshare(ps2)*M
-
-					if i == 1
-						res = -(est_pdf(lambda_vec[k])*ss1 + d_est_pdf(lambda_vec[k])*ss2) + (1-est_cdf(lambda_vec[k]))*(ss3 + ss4 + ss5 + ss6 - ss7 - ss8 - ss9 - ss10) - 2*est_pdf(lambda_vec[k])*(ss11 + ss12 - ss13 - ss14) - d_est_pdf(lambda_vec[k])*(ss15 - ss16)
-						whess_mat[i+N-1,i+N-1] = -res
-					else
-						res = est_pdf(lambda_vec[k])*ss17 + d_est_pdf(lambda_vec[k])*ss18 - (est_pdf(lambda_vec[k])*ss1 + d_est_pdf(lambda_vec[k])*ss2) + (1-est_cdf(lambda_vec[k]))*(ss3 + ss4 + ss5 + ss6 - ss7 - ss8 - ss9 - ss10) - 2*est_pdf(lambda_vec[k])*(ss11 + ss12 - ss13 - ss14) - d_est_pdf(lambda_vec[k])*(ss15 - ss16)
-						whess_mat[i+N-1,i+N-1] = -res
-					end
-				end
-				# lambda rho part = transposed rho lambda part
-				for i = 1:N-1
-					for j = 1:N-1
-						k = i+1
-						if j == i
-							ps1 = Lp_star(rho_vec[k],lambda_vec[k])
-							ss1 = (rho_vec[k] - c)*Ld_share(ps1)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k])
-							ss2 = Lshare(ps1)*M
-							ss3 = (ps1 - rho_vec[k] + lambda_vec[k])*(Ld_share(ps1)*M*Ld2_pstar_d_rho_d_lambda(rho_vec[k],lambda_vec[k]) + Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])*Ldd_share(ps1)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k]))
-							ss4 = Ld_share(ps1)*M*Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k])*(Ld_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)
-							ss5 = Lshare(ps1)*M*Ld2_pstar_d_rho_d_lambda(rho_vec[k],lambda_vec[k])
-							ss6 = (Ld_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + 1)*Ld_share(ps1)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k])
-							ss7 = (ps1 - rho_vec[k] + lambda_vec[k])*Ld_share(ps1)*M*Ld_pstar_d_rho(rho_vec[k],lambda_vec[k])
-							ss8 = Lshare(ps1)*M*(Ld_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)
-							res = -est_pdf(lambda_vec[k])*(ss1 + ss2) + (1-est_cdf(lambda_vec[k]))*(ss3 + ss4 + ss5 + ss6) - est_pdf(lambda_vec[k])*(ss7 + ss8)
-							whess_mat[i+N-1,j] = -res
-							whess_mat[j,i+N-1] = -res
-						elseif j == i-1
-							ps2 = Lp_star(rho_vec[k-1],lambda_vec[k])
-							ts1 = (rho_vec[k-1] - c)*Ld_share(ps2)*M*Ld_pstar_d_rho(rho_vec[k-1],lambda_vec[k])
-							ts2 = Lshare(ps2)*M
-							ts3 = (ps2 - rho_vec[k-1] + lambda_vec[k])*(Ld_share(ps2)*M*Ld2_pstar_d_rho_d_lambda(rho_vec[k-1],lambda_vec[k]) + Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])*Ldd_share(ps2)*M*Ld_pstar_d_rho(rho_vec[k-1],lambda_vec[k]))
-							ts4 = Ld_share(ps2)*M*Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])*(Ld_pstar_d_rho(rho_vec[k-1],lambda_vec[k]) - 1)
-							ts5 = Lshare(ps2)*M*Ld2_pstar_d_rho_d_lambda(rho_vec[k-1],lambda_vec[k])
-							ts6 = (Ld_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)*Ld_share(ps2)*M*Ld_pstar_d_rho(rho_vec[k-1],lambda_vec[k])
-							ts7 = (ps2 - rho_vec[k-1] + lambda_vec[k])*Ld_share(ps2)*M*Ld_pstar_d_rho(rho_vec[k-1],lambda_vec[k])
-							ts8 = Lshare(ps2)*M*(Ld_pstar_d_rho(rho_vec[k-1],lambda_vec[k]) - 1)
-							res = est_pdf(lambda_vec[k])*(ts1 + ts2) - (1-est_cdf(lambda_vec[k]))*(ts3 + ts4 + ts5 + ts6) + est_pdf(lambda_vec[k])*(ts7 + ts8)
-							whess_mat[i+N-1,j] = -res
-							whess_mat[j,i+N-1] = -res
-						else
-							whess_mat[i+N-1,j] = 0.0
-							whess_mat[j,i+N-1] = 0.0
-						end
-					end
 				end
 			end
 			rho_start = convert(Array{Float64,1},[urho(k) for k = 1:N-1])
@@ -461,7 +299,7 @@ end
 			innerx0 = [rho_start;lambda_start]
 			#innerx0 = [1.0, 0.75, 0.5, 0.3, 0.6, 0.9] + 0*randn(2*(N-1))
 			# checking hessian and gradient
-			#=	
+			#=
 			println(innerx0)
 			
 			gtest1 = ones(2*(N-1))
@@ -469,37 +307,58 @@ end
 			htest = ones(2*(N-1),2*(N-1))
 			eps = zeros(2*(N-1)) 
 			step = 1e-9
-			eps[6] = step
+			eps[4] = step
 			est_grad = (Lw_profit(innerx0+eps) - Lw_profit(innerx0-eps))/(2*step)
 			println("Numerical grad: ", est_grad)
 			Lwfocs!(innerx0,gtest1)
 			println(gtest1)
 
-			Lwfocs!(innerx0+eps,gtest1)
-			Lwfocs!(innerx0-eps,gtest2)
-			Lwhess!(innerx0,htest)
-			println((gtest1 - gtest2)/(2*step))
-			println(htest)
 			solution = 1
 			return solution
-			=#	
-			solution = optimize(Lw_profit,Lwfocs!,Lwhess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 1500, f_tol = 1e-64, g_tol = 1e-6)
-			#println(solution)
-			est_rhos = [rho_0 ; Optim.minimizer(solution)[1:N-1]]
-			est_lambdas = [lambda_lb ; Optim.minimizer(solution)[N:end] ; lambda_ub]
+			=#
+			# Solving problem numerically. Using JuMP modeling language
+			JuMP.register(:Lshare,1,Lshare,autodiff = true) # share function
+			JuMP.register(:Lp_star,1,Lp_star,Ld_pstar_d_rho,Ld2_pstar_d2_rho) 
+			JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
+			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP)) #bad form, but needed for meta programming BS
+			@variable(Linner_m,Linner_s[1:2*(N-1)])
+			global Linner_s = Linner_s #bad form, but needed for meta programming BS
+			for k = 1:N-1 
+				setvalue(Linner_s[k],urho(k)) # setting rho starting values
+				setvalue(Linner_s[N-1+k],ulambda(k)) # setting lambda starting values
+			end
+			if constrained == 1
+				@NLconstraint(Linner_m,cons1,Linner_s[N]*Lshare(Lp_star(Linner_s[1])) == 0)
+			end
+		
+			# defining objective function. Need to use meta-programming BS to get around syntax limitations
+			obj_str = "@NLobjective(Linner_m, Min, Lw_profit("
+			for i = 1:2*(N-1)
+				obj_str = obj_str * "Linner_s[$i],"
+			end
+			obj_str = obj_str[1:end-1] # removing last comma
+			obj_str = obj_str * "))" # closing parens
+			eval(parse(obj_str))
+			inner_sol = solve(Linner_m)
+			sol_sched = getvalue(Linner_s)
+			
+			est_rhos = [rho_0 ; sol_sched[1:N-1]]
+			est_lambdas = [lambda_lb ; sol_sched[N:end] ; lambda_ub]
 
 			
 			# Calculating fixed fees
 			est_ff = [0.0]
 			for i in 1:N-1
 				k = i+1
-				A = est_ff[k-1] + (Lp_star(est_rhos[k],est_lambdas[k]) - est_rhos[k] + est_lambdas[k])*Lshare(Lp_star(est_rhos[k],est_lambdas[k]))*M - (Lp_star(est_rhos[k-1],est_lambdas[k]) - est_rhos[k-1] + est_lambdas[k])*Lshare(Lp_star(est_rhos[k-1],est_lambdas[k]))*M
+				A = est_ff[k-1] + (Lp_star(est_rhos[k]) - est_rhos[k])*Lshare(Lp_star(est_rhos[k]))*M*est_lambdas[k] - (Lp_star(est_rhos[k-1]) - est_rhos[k-1])*Lshare(Lp_star(est_rhos[k-1]))*M*est_lambdas[k]
 				push!(est_ff,A)
 			end
 			return (est_rhos,est_ff,est_lambdas)
-			
-		end
-		function price_sched_calc(params,N;hot_start=nothing)
+		end		
+		
+		function price_sched_calc(params,N)
+			constrained = 1 # solving problem with A1 constrained to 0
+
 			# params are the params of the wholesaler's problem we're trying to
 			# estimate. 
 
@@ -510,258 +369,138 @@ end
 			#max_mc = params[2] # max MC for retailer. Scales type parameter
 			#M = exp(params[5])
 			#distribution parameters
-			a = 1.0 #exp(params[2]) #
+			a = 1.0 # exp(params[2]) #
 			b = exp(params[2]) # 
-			lambda_lb = -max_mc
-			lambda_ub = max_mc
+			lambda_lb = 0.0
+			lambda_ub = 1.0
 				
-			est_cdf(x) = cdf(Beta(a,b),(x-lambda_lb)/(lambda_ub - lambda_lb))
-			est_pdf(x) = pdf(Beta(a,b),(x-lambda_lb)/(lambda_ub - lambda_lb))/(lambda_ub - lambda_lb)
-			d_est_pdf(x) = ((1/(lambda_ub - lambda_lb))^2)*((a + b - 2)*(x-lambda_lb)/(lambda_ub - lambda_lb) - (a - 1))/(((x-lambda_lb)/(lambda_ub - lambda_lb) -1)*(x-lambda_lb)/(lambda_ub - lambda_lb))*pdf(Beta(a,b),(x-lambda_lb)/(lambda_ub - lambda_lb))
+			est_cdf(x) = cdf(Beta(a,b),x)
+			est_pdf(x) = pdf(Beta(a,b),x)
 			
-			#=
-			#= below formulation of th Kumaraswarmy distribution isn't exactly right. Should only be defined on (0,1) and pdf is 0 outside that. Programming that in makes it act funny =#		
-			est_cdf(x) = 1.0 - (1.0-(x/max_mc)^a)^b
-			est_pdf(x) = ForwardDiff.derivative(est_cdf,x)
-			d_est_pdf(x) = ForwardDiff.derivative(est_pdf,x)
-			=#
-
-
-			#= finding rho_0. rho_0 is such that the lowest type is indifferent about purchasing (entering the market)
-			For retailers, this equates to a 0-profit condition:
-			(p_star(rho_0,lambda_ub) - rho_0 - lambda_ub)*share(p_star(rho_0,lambda_ub)) = 0
-
-			function low_profit!(rho_0, lpvec)
-				u = p_star(rho_0,lambda_lb)
-				lpvec[1] = (u - rho_0 - lambda_lb)*share(u)
-			end
-			rho_0_sol = nlsolve(low_profit!,[12.0])
-			rho_0 = rho_0_sol.zero[1]
-			=#
-			#rho_0 = obs_rhos[1]*2.0
-			rho_0 = max_rho*2.0
+			rho_0 = 2.0*max_rho
+		
 			##### Optimizer Approach
-			function w_profit(theta)
+			function w_profit(params...)
+				theta = collect(params)
 				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
 				rho_vec = [rho_0 ; theta[1:N-1]]
 				profit = 0.0
 				for i = 1:N-1
 					k = i+1 # dealing with indexing
-					f(l) =  ((rho_vec[k] - c)*share(p_star(rho_vec[k],l))*M)*est_pdf(l)
+					f(l) =  l*est_pdf(l)
 					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
 					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = p_star(rho_vec[k],lambda_vec[k])
-					ps2 = p_star(rho_vec[k-1],lambda_vec[k])
-					inc = int + (1-est_cdf(lambda_vec[k]))*((ps1 - rho_vec[k] + lambda_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1] + lambda_vec[k])*share(ps2)*M)
+					ps1 = p_star(rho_vec[k])
+					ps2 = p_star(rho_vec[k-1])
+					inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
 					profit = profit + inc
 				end
 				return -profit
 			end
-			function wfocs!(theta::Vector, wfocs_vec)
+			function wfocs!(wfocs_vec,params...)
+				theta = collect(params)
 				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
 				rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
 				# Calculating FOCs
 				for i in 1:N-1 
 					k = i+1 # dealing with the increment in indexing and making code look more like notation
 					#calculating integral for rho FOC
-A
-					f(l) =  ((rho_vec[k] - c)*d_share(p_star(rho_vec[k],l))*M*d_pstar_d_rho(rho_vec[k],l) + share(p_star(rho_vec[k],l))*M)*est_pdf(l)
+					f(l) = l*est_pdf(l)
 					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
 					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = p_star(rho_vec[k],lambda_vec[k])
-					ps2 = p_star(rho_vec[k-1],lambda_vec[k])
-					ps3 = p_star(rho_vec[k],lambda_vec[k+1])
+					ps1 = p_star(rho_vec[k])
+					ps2 = p_star(rho_vec[k-1])
 					#rho FOC
-					if i == N-1
-						term1 = (ps1 - rho_vec[k] + lambda_vec[k])*d_share(ps1)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k]) + share(ps1)*M*(d_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)
-						
-						res = int + (1-est_cdf(lambda_vec[k]))*term1
+						term1 = ((rho_vec[k] - c)*M*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + M*share(ps1))*int
+						term2 = ((ps1 - rho_vec[k])*M*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + M*share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+						term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+						res = term1 + term2*term3
 						wfocs_vec[i] = -res
-					else
-						term1 = (ps1 - rho_vec[k] + lambda_vec[k])*d_share(ps1)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k]) + share(ps1)*M*(d_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)
-						term2 = (ps3 - rho_vec[k] + lambda_vec[k+1])*d_share(ps3)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k+1]) + share(ps3)*M*(d_pstar_d_rho(rho_vec[k],lambda_vec[k+1]) - 1)
-						
-						res = int + (1-est_cdf(lambda_vec[k]))*term1 - (1-est_cdf(lambda_vec[k+1]))*term2
-						wfocs_vec[i] = -res
-					end
 					# lambda FOC
 					if i == 1
-						term1 = (rho_vec[k] - c)*share(ps1)*M*est_pdf(lambda_vec[k])
-						term2a = (ps1 - rho_vec[k] + lambda_vec[k])*d_share(ps1)*M*d_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-						term2b = share(ps1)*M*(d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + 1)
-						term2c = (ps2 - rho_vec[k-1] + lambda_vec[k])*d_share(ps2)*M*d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-						term2d = share(ps2)*M*(d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)
-						term3a = (ps1 - rho_vec[k] + lambda_vec[k])*share(ps1)*M
-						term3b = (ps2 - rho_vec[k-1] + lambda_vec[k])*share(ps2)*M
-						res = -term1 + (1-est_cdf(lambda_vec[k]))*(term2a + term2b - term2c - term2d) - est_pdf(lambda_vec[k])*(term3a - term3b)
+						term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+						term2 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
+						term3 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+						res = term1 + term2*term3
 						wfocs_vec[i+N-1] = -res
 					else
-						term0 = (rho_vec[k-1] - c)*share(ps2)*M
-						term1 = (rho_vec[k] - c)*share(ps1)*M
-						term2a = (ps1 - rho_vec[k] + lambda_vec[k])*d_share(ps1)*M*d_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-						term2b = share(ps1)*M*(d_pstar_d_lambda(rho_vec[k],lambda_vec[k])+1)
-						term2c = (ps2 - rho_vec[k-1] + lambda_vec[k])*d_share(ps2)*M*d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-						term2d = share(ps2)*M*(d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)
-						term3a = (ps1 - rho_vec[k] + lambda_vec[k])*share(ps1)*M
-						term3b = (ps2 - rho_vec[k-1] + lambda_vec[k])*share(ps2)*M
-						res = est_pdf(lambda_vec[k])*(term0 - term1) + (1-est_cdf(lambda_vec[k]))*(term2a + term2b - term2c - term2d) - est_pdf(lambda_vec[k])*(term3a - term3b)
+						term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+						term2 = ((rho_vec[k-1] - c)*M*share(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+						term3 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
+						term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+						res = term1 + term2 + term3*term4
 						wfocs_vec[i+N-1] = -res
 					end
 					
 				end
 			end
-			function whess!(theta::Vector, whess_mat)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]]
-				#rho rho part diagonal elements
-				for i = 1:N-1
-					k = i+1
-					f(l) = ((rho_vec[k] - c)*(d_share(p_star(rho_vec[k],l))*M*d2_pstar_d2_rho(rho_vec[k],l) + (d_pstar_d_rho(rho_vec[k],l)^2)*dd_share(p_star(rho_vec[k],l))*M) + 2*d_share(p_star(rho_vec[k],l))*M*d_pstar_d_rho(rho_vec[k],l))*est_pdf(l)
-					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
-					ps1 = p_star(rho_vec[k],lambda_vec[k])
-					ss1 = (ps1 - rho_vec[k] + lambda_vec[k])*(d_share(ps1)*M*d2_pstar_d2_rho(rho_vec[k],lambda_vec[k]) + (d_pstar_d_rho(rho_vec[k],lambda_vec[k])^2)*dd_share(ps1)*M)
-					ss2 = d_share(ps1)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k])*(d_pstar_d_rho(rho_vec[k],lambda_vec[k])-1)
-					ss3 = share(ps1)*M*d2_pstar_d2_rho(rho_vec[k],lambda_vec[k])
-					ss4 = (d_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)*d_share(ps1)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k])
-					if i != N-1
-						ps2 = p_star(rho_vec[k],lambda_vec[k+1])
-						ss5 = (ps2 - rho_vec[k] + lambda_vec[k+1])*(d_share(ps2)*M*d2_pstar_d2_rho(rho_vec[k],lambda_vec[k+1]) + (d_pstar_d_rho(rho_vec[k],lambda_vec[k+1])^2)*dd_share(ps2)*M)
-						ss6 = d_share(ps2)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k+1])*(d_pstar_d_rho(rho_vec[k],lambda_vec[k+1])-1)
-						ss7 = share(ps2)*M*d2_pstar_d2_rho(rho_vec[k],lambda_vec[k+1])
-						ss8 = (d_pstar_d_rho(rho_vec[k],lambda_vec[k+1]) - 1)*d_share(ps2)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k+1])
-						res = int + (1-est_cdf(lambda_vec[k]))*(ss1 + ss2 + ss3 + ss4) - (1-est_cdf(lambda_vec[k+1]))*(ss5 + ss6 + ss7 + ss8)
-						whess_mat[i,i] = -res	
-					else
-						res = int + (1-est_cdf(lambda_vec[k]))*(ss1 + ss2 + ss3 + ss4)
-						whess_mat[i,i] = -res
-					end
-				end
-				# rho rho and lambda lambda off diagonals
-				for i = 1:N-1
-					for j = 1:N-1
-						if j != i
-							whess_mat[i,j] = 0.0
-							whess_mat[i+N-1,j+N-1] = 0.0
-						end
-					end
-				end
-				#lambda lambda part diagonals
-				for i = 1:N-1
-					k = i+1
-					ps1 = p_star(rho_vec[k],lambda_vec[k])
-					ps2 = p_star(rho_vec[k-1],lambda_vec[k])
-					ss1 = (rho_vec[k] - c)*d_share(ps1)*M*d_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-					ss2 = (rho_vec[k] - c)*share(ps1)*M
-					ss3 = (ps1-rho_vec[k]+lambda_vec[k])*(d_share(ps1)*M*d2_pstar_d2_lambda(rho_vec[k],lambda_vec[k]) + (d_pstar_d_lambda(rho_vec[k],lambda_vec[k])^2)*dd_share(ps1)*M)
-					ss4 = d_share(ps1)*M*d_pstar_d_lambda(rho_vec[k],lambda_vec[k])*(d_pstar_d_lambda(rho_vec[k],lambda_vec[k])+1)
-					ss5 = share(ps1)*M*d2_pstar_d2_lambda(rho_vec[k],lambda_vec[k])
-					ss6 = (d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + 1)*d_share(ps1)*M*d_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-					ss7 = (ps2-rho_vec[k-1]+lambda_vec[k])*(d_share(ps2)*M*d2_pstar_d2_lambda(rho_vec[k-1],lambda_vec[k]) + (d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])^2)*dd_share(ps2)*M)
-					ss8 = d_share(ps2)*M*d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])*(d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])+1)
-					ss9 = share(ps2)*M*d2_pstar_d2_lambda(rho_vec[k-1],lambda_vec[k])
-					ss10 = (d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)*d_share(ps2)*M*d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-					ss11 = (ps1 - rho_vec[k] + lambda_vec[k])*d_share(ps1)*M*d_pstar_d_lambda(rho_vec[k],lambda_vec[k])
-					ss12 = share(ps1)*M*(d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + 1)
-					ss13 = (ps2 - rho_vec[k-1] + lambda_vec[k])*d_share(ps2)*M*d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-					ss14 = share(ps2)*M*(d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)
-					ss15 = (ps1 - rho_vec[k] + lambda_vec[k])*share(ps1)*M
-					ss16 = (ps2 - rho_vec[k-1] + lambda_vec[k])*share(ps2)*M
-					ss17 = (rho_vec[k-1] - c)*d_share(ps2)*M*d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])
-					ss18 = (rho_vec[k-1] - c)*share(ps2)*M
-
-					if i == 1
-						res = -(est_pdf(lambda_vec[k])*ss1 + d_est_pdf(lambda_vec[k])*ss2) + (1-est_cdf(lambda_vec[k]))*(ss3 + ss4 + ss5 + ss6 - ss7 - ss8 - ss9 - ss10) - 2*est_pdf(lambda_vec[k])*(ss11 + ss12 - ss13 - ss14) - d_est_pdf(lambda_vec[k])*(ss15 - ss16)
-						whess_mat[i+N-1,i+N-1] = -res
-					else
-						res = est_pdf(lambda_vec[k])*ss17 + d_est_pdf(lambda_vec[k])*ss18 - (est_pdf(lambda_vec[k])*ss1 + d_est_pdf(lambda_vec[k])*ss2) + (1-est_cdf(lambda_vec[k]))*(ss3 + ss4 + ss5 + ss6 - ss7 - ss8 - ss9 - ss10) - 2*est_pdf(lambda_vec[k])*(ss11 + ss12 - ss13 - ss14) - d_est_pdf(lambda_vec[k])*(ss15 - ss16)
-						whess_mat[i+N-1,i+N-1] = -res
-					end
-				end
-				# lambda rho part = transposed rho lambda part
-				for i = 1:N-1
-					for j = 1:N-1
-						k = i+1
-						if j == i
-							ps1 = p_star(rho_vec[k],lambda_vec[k])
-							ss1 = (rho_vec[k] - c)*d_share(ps1)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k])
-							ss2 = share(ps1)*M
-							ss3 = (ps1 - rho_vec[k] + lambda_vec[k])*(d_share(ps1)*M*d2_pstar_d_rho_d_lambda(rho_vec[k],lambda_vec[k]) + d_pstar_d_lambda(rho_vec[k],lambda_vec[k])*dd_share(ps1)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k]))
-							ss4 = d_share(ps1)*M*d_pstar_d_lambda(rho_vec[k],lambda_vec[k])*(d_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)
-							ss5 = share(ps1)*M*d2_pstar_d_rho_d_lambda(rho_vec[k],lambda_vec[k])
-							ss6 = (d_pstar_d_lambda(rho_vec[k],lambda_vec[k]) + 1)*d_share(ps1)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k])
-							ss7 = (ps1 - rho_vec[k] + lambda_vec[k])*d_share(ps1)*M*d_pstar_d_rho(rho_vec[k],lambda_vec[k])
-							ss8 = share(ps1)*M*(d_pstar_d_rho(rho_vec[k],lambda_vec[k]) - 1)
-							res = -est_pdf(lambda_vec[k])*(ss1 + ss2) + (1-est_cdf(lambda_vec[k]))*(ss3 + ss4 + ss5 + ss6) - est_pdf(lambda_vec[k])*(ss7 + ss8)
-							whess_mat[i+N-1,j] = -res
-							whess_mat[j,i+N-1] = -res
-						elseif j == i-1
-							ps2 = p_star(rho_vec[k-1],lambda_vec[k])
-							ts1 = (rho_vec[k-1] - c)*d_share(ps2)*M*d_pstar_d_rho(rho_vec[k-1],lambda_vec[k])
-							ts2 = share(ps2)*M
-							ts3 = (ps2 - rho_vec[k-1] + lambda_vec[k])*(d_share(ps2)*M*d2_pstar_d_rho_d_lambda(rho_vec[k-1],lambda_vec[k]) + d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])*dd_share(ps2)*M*d_pstar_d_rho(rho_vec[k-1],lambda_vec[k]))
-							ts4 = d_share(ps2)*M*d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k])*(d_pstar_d_rho(rho_vec[k-1],lambda_vec[k]) - 1)
-							ts5 = share(ps2)*M*d2_pstar_d_rho_d_lambda(rho_vec[k-1],lambda_vec[k])
-							ts6 = (d_pstar_d_lambda(rho_vec[k-1],lambda_vec[k]) + 1)*d_share(ps2)*M*d_pstar_d_rho(rho_vec[k-1],lambda_vec[k])
-							ts7 = (ps2 - rho_vec[k-1] + lambda_vec[k])*d_share(ps2)*M*d_pstar_d_rho(rho_vec[k-1],lambda_vec[k])
-							ts8 = share(ps2)*M*(d_pstar_d_rho(rho_vec[k-1],lambda_vec[k]) - 1)
-							res = est_pdf(lambda_vec[k])*(ts1 + ts2) - (1-est_cdf(lambda_vec[k]))*(ts3 + ts4 + ts5 + ts6) + est_pdf(lambda_vec[k])*(ts7 + ts8)
-							whess_mat[i+N-1,j] = -res
-							whess_mat[j,i+N-1] = -res
-						else
-							whess_mat[i+N-1,j] = 0.0
-							whess_mat[j,i+N-1] = 0.0
-						end
-					end
-				end
-			end
-			if hot_start == nothing
-				rho_start = [max_mc/i for i = 1:N-1]
-				lambda_start = [(lambda_ub -lambda_lb)/(N)*i for i = 1:N-1] 	
-				innerx0 = [rho_start;lambda_start]
-			else
-				innerx0 = hot_start
-			end
+			innerx0 = [1.0, 0.75, 0.5, 0.3, 0.6, 0.9]
 			# checking hessian and gradient
 			#=	
-			println(x0)
+			println(innerx0)
+			
 			gtest1 = ones(2*(N-1))
 			gtest2 = ones(2*(N-1))
 			htest = ones(2*(N-1),2*(N-1))
 			eps = zeros(2*(N-1)) 
 			step = 1e-9
-			eps[8] = step
-			est_grad = (w_profit(innerx0+eps) - w_profit(innerx0-eps))/(2*step)
+			eps[6] = step
+			upx = innerx0 + eps
+			downx = innerx0 - eps
+			est_grad = (w_profit(upx...) - w_profit(downx...))/(2*step)
 			println("Numerical grad: ", est_grad)
-			wfocs!(innerx0,gtest1)
+			wfocs!(gtest1,innerx0...)
 			println(gtest1)
 
-			wfocs!(innerx0+eps,gtest1)
-			wfocs!(innerx0-eps,gtest2)
-			whess!(innerx0,htest)
-			println((gtest1 - gtest2)/(2*step))
-			println(htest)
 			solution = 1
-			=#
-			solution = optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), show_trace = false, extended_trace = false, iterations = 500, f_tol = 1e-32, g_tol = 1e-6)
-			est_rhos = [rho_0 ; Optim.minimizer(solution)[1:N-1]]
-			est_lambdas = [lambda_lb ; Optim.minimizer(solution)[N:end] ; lambda_ub]
-			#println(solution)
+			return solution
+			=#	
+			# Solving problem numerically. Using JuMP modeling language
+			JuMP.register(:share,1,share,autodiff = true) # share function
+			JuMP.register(:p_star,1,p_star,d_pstar_d_rho,d2_pstar_d2_rho) 
+			JuMP.register(:w_profit,2*(N-1),w_profit,wfocs!, autodiff = false)
+			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP)) #bad form, but needed for meta programming BS
+			@variable(inner_m,inner_s[1:2*(N-1)])
+			global inner_s = inner_s #bad form, but needed for meta programming BS
+			
+			# setting starting values. Using solution to linear model as hot start
+			(Lrho,Lff,Llambda) = Lprice_sched_calc(params,N)
+			for k = 1:N-1 
+				setvalue(inner_s[k],Lrho[k+1]) # setting rho starting values
+				setvalue(inner_s[N-1+k],Llambda[k+1]) # setting lambda starting values
+			end
+			if constrained == 1
+				@NLconstraint(inner_m,cons1,inner_s[N]*share(p_star(inner_s[1])) == 0)
+			end
+		
+			# defining objective function. Need to use meta-programming BS to get around syntax limitations
+			obj_str = "@NLobjective(inner_m, Min, w_profit("
+			for i = 1:2*(N-1)
+				obj_str = obj_str * "inner_s[$i],"
+			end
+			obj_str = obj_str[1:end-1] # removing last comma
+			obj_str = obj_str * "))" # closing parens
+			eval(parse(obj_str))
+			inner_sol = solve(inner_m)
+			sol_sched = getvalue(inner_s)
+			
+			est_rhos = [rho_0 ; sol_sched[1:N-1]]
+			est_lambdas = [lambda_lb ; sol_sched[N:end] ; lambda_ub]
+
 			
 			# Calculating fixed fees
 			est_ff = [0.0]
 			for i in 1:N-1
 				k = i+1
-				A = est_ff[k-1] + (p_star(est_rhos[k],est_lambdas[k]) - est_rhos[k] + est_lambdas[k])*share(p_star(est_rhos[k],est_lambdas[k]))*M - (p_star(est_rhos[k-1],est_lambdas[k]) - est_rhos[k-1] + est_lambdas[k])*share(p_star(est_rhos[k-1],est_lambdas[k]))*M
+				A = est_ff[k-1] + (p_star(est_rhos[k]) - est_rhos[k])*share(p_star(est_rhos[k]))*M*est_lambdas[k] - (p_star(est_rhos[k-1]) - est_rhos[k-1])*share(p_star(est_rhos[k-1]))*M*est_lambdas[k]
 				push!(est_ff,A)
 			end
 			return (est_rhos,est_ff,est_lambdas)
+			
 		end
-		
 		function obj_func(omega::Vector, N::Int, W::Matrix)
 			tic()
-			hsrho,hsff,hslambda = Lprice_sched_calc(omega,N)
-			hs = [hsrho[2:end];hslambda[2:end-1]]
-			rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N; hot_start = hs)
+			rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N)
 			vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 			res = vec*W*vec'
 			toc()
@@ -844,15 +583,13 @@ A
 		#W = eye(2*(N-1)- 1)
 		
 		# testing recovery of params with fake data
-		#=	
+			
 		println("Testing recovery of parameters with 'fake' data")
 		x0 = [3.0; log(2.0)]
-		hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
-		hs = [hsrho[2:end];hslambda[2:end-1]]
-		nlrho,nlff,nllamb = price_sched_calc(x0,N, hot_start = hs)
+		nlrho,nlff,nllamb = price_sched_calc(x0,N)
 		obs_rhos = nlrho[2:end]
 		obs_ff = [0.0;nlff[3:end]]
-		=#
+		println(obs_rhos)
 		#ux0 = [3.0,15.0]
 		W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-3)
 		# checking Objective func gradient
@@ -890,7 +627,7 @@ A
 		
 		outerg(x) = obj_func(x,N,W)
 		#x0 = [2.0; 11.0; log(1.0); log(1.0)]
-		optim_res = optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
+		optim_res = Optim.optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
 		println(optim_res)
 		min_X = Optim.minimizer(optim_res)
 		hsrho,hsff,hslambda = Lprice_sched_calc(min_X,N)
@@ -908,11 +645,11 @@ df = readtable("../../demand_estimation/berry_logit/berry_logit.csv")
 
 tups = [] # market,product tuples to run estimation on
 
-markets = convert(Vector, levels(df[:,:mkt]))
-#markets = [11725]
+#markets = convert(Vector, levels(df[:,:mkt]))
+markets = [11725]
 for market in markets
-	products = levels(df[df[:mkt] .== market, :product])
-	#products = [350]
+	#products = levels(df[df[:mkt] .== market, :product])
+	products = [350]
 	for product in products
 		m = convert(Int,market)
 		p = convert(Int,product)
@@ -922,9 +659,11 @@ end
 
 total_tups = length(tups)
 println("Total estimates to produce: $total_tups")
-
+println(ss_est((11725,350)))
+#=
 csvfile = open("indirect_est.csv", "w")
 write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
-test = pmap(ss_est,tups)
-writedlm(csvfile,test,"|")
+para_out = pmap(ss_est,tups)
+writedlm(csvfile,para_out,"|")
 close(csvfile)
+=#

@@ -63,6 +63,7 @@ end
 	return dot(f_evals, weights)*(b-a)::Float64
 end
 
+
 @everywhere function ss_est(mkt_prod_tup::Tuple)
 	market = mkt_prod_tup[1]
 	product = mkt_prod_tup[2]
@@ -317,10 +318,12 @@ end
 			return solution
 			=#
 			# Solving problem numerically. Using JuMP modeling language
-			JuMP.register(:Lshare,1,Lshare,autodiff = true) # share function
-			JuMP.register(:Lp_star,1,Lp_star,Ld_pstar_d_rho,Ld2_pstar_d2_rho) 
-			JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
-			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP)) #bad form, but needed for meta programming BS
+			try
+				JuMP.register(:Lshare,1,Lshare,autodiff = true) # share function
+				JuMP.register(:Lp_star,1,Lp_star,Ld_pstar_d_rho,Ld2_pstar_d2_rho) 
+				JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
+			end
+			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=1e-4, ftol_rel=1e-4, maxeval=500)) #bad form, but needed for meta programming BS
 			@variable(Linner_m,Linner_s[1:2*(N-1)])
 			global Linner_s = Linner_s #bad form, but needed for meta programming BS
 			for k = 1:N-1 
@@ -454,12 +457,14 @@ end
 
 			solution = 1
 			return solution
-			=#	
+			=#
 			# Solving problem numerically. Using JuMP modeling language
-			JuMP.register(:share,1,share,autodiff = true) # share function
-			JuMP.register(:p_star,1,p_star,d_pstar_d_rho,d2_pstar_d2_rho) 
-			JuMP.register(:w_profit,2*(N-1),w_profit,wfocs!, autodiff = false)
-			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP)) #bad form, but needed for meta programming BS
+			try
+				JuMP.register(:share,1,share,autodiff = true) # share function
+				JuMP.register(:p_star,1,p_star,d_pstar_d_rho,d2_pstar_d2_rho) 
+				JuMP.register(:w_profit,2*(N-1),w_profit,wfocs!, autodiff = false)
+			end
+			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_rel=1e-4, maxeval=1000)) #bad form, but needed for meta programming BS
 			@variable(inner_m,inner_s[1:2*(N-1)])
 			global inner_s = inner_s #bad form, but needed for meta programming BS
 			
@@ -583,13 +588,16 @@ end
 		#W = eye(2*(N-1)- 1)
 		
 		# testing recovery of params with fake data
-			
+				
 		println("Testing recovery of parameters with 'fake' data")
-		x0 = [3.0; log(2.0)]
+		x0 = [5.0; log(10.0)]
 		nlrho,nlff,nllamb = price_sched_calc(x0,N)
 		obs_rhos = nlrho[2:end]
 		obs_ff = [0.0;nlff[3:end]]
 		println(obs_rhos)
+		
+
+
 		#ux0 = [3.0,15.0]
 		W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-3)
 		# checking Objective func gradient
@@ -619,7 +627,8 @@ end
 			
 		# grid search
 		#grid_points = [[i,j,0.0,0.0] for i = 0.0:10.0, j = 2.0:2.0:20.0]
-		grid_points = [[i,l] for i = linspace(0,80,20), l=linspace(-2.0,2.0,5)]
+		println("Starting initial grid search")
+		grid_points = [[i,l] for i = linspace(0,20,20), l=linspace(0.0,2.0,5)]
 		grid_evals = map(outerg,grid_points)
 		min_ind = indmin(grid_evals)
 		x0 = grid_points[min_ind]
@@ -627,12 +636,12 @@ end
 		
 		outerg(x) = obj_func(x,N,W)
 		#x0 = [2.0; 11.0; log(1.0); log(1.0)]
-		optim_res = Optim.optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
+		optim_res = Optim.optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-8))
 		println(optim_res)
 		min_X = Optim.minimizer(optim_res)
 		hsrho,hsff,hslambda = Lprice_sched_calc(min_X,N)
 		hs = [hsrho[2:end];hslambda[2:end-1]]
-		fit_ps = price_sched_calc(min_X,N, hot_start = hs)
+		fit_ps = price_sched_calc(min_X,N)
 
 		outtuple = (product,market,min_X[1], max_mc, 1.0, min_X[2], fit_ps)
 		return outtuple

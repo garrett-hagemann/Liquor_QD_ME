@@ -320,10 +320,40 @@ end
 			# Solving problem numerically. Using JuMP modeling language
 			try
 				JuMP.register(:Lshare,1,Lshare,autodiff = true) # share function
-				JuMP.register(:Lp_star,1,Lp_star,Ld_pstar_d_rho,Ld2_pstar_d2_rho) 
-				JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
+			catch e
+				if e.msg == "Operator Lshare has already been defined"
+					ind = pop!(ReverseDiffSparse.univariate_operator_to_id, :Lshare)
+					deleteat!(ReverseDiffSparse.univariate_operators,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_f,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_fprime,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_fprimeprime,ind)
+					JuMP.register(:Lshare,1,Lshare,autodiff = true) # share function
+				end
 			end
-			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=1e-4, ftol_rel=1e-4, maxeval=500)) #bad form, but needed for meta programming BS
+
+			try
+				JuMP.register(:Lp_star,1,Lp_star,Ld_pstar_d_rho,Ld2_pstar_d2_rho) 
+			catch e
+				if e.msg == "Operator Lp_star has already been defined"
+					ind = pop!(ReverseDiffSparse.univariate_operator_to_id, :Lp_star)
+					deleteat!(ReverseDiffSparse.univariate_operators,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_f,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_fprime,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_fprimeprime,ind)
+					JuMP.register(:Lp_star,1,Lp_star,Ld_pstar_d_rho,Ld2_pstar_d2_rho) 
+				end
+			end
+
+			try
+				JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
+			catch e
+				if e.msg == "Operator Lw_profit has already been defined"
+					ind = pop!(ReverseDiffSparse.operator_to_id, :Lw_profit)
+					pop!(ReverseDiffSparse.user_operator_map,ind)
+					JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
+				end
+			end
+			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=1e-6, ftol_rel=1e-6, maxeval = 1000)) #bad form, but needed for meta programming BS
 			@variable(Linner_m,Linner_s[1:2*(N-1)])
 			global Linner_s = Linner_s #bad form, but needed for meta programming BS
 			for k = 1:N-1 
@@ -439,7 +469,7 @@ end
 			end
 			innerx0 = [1.0, 0.75, 0.5, 0.3, 0.6, 0.9]
 			# checking hessian and gradient
-			#=	
+			#=		
 			println(innerx0)
 			
 			gtest1 = ones(2*(N-1))
@@ -461,10 +491,42 @@ end
 			# Solving problem numerically. Using JuMP modeling language
 			try
 				JuMP.register(:share,1,share,autodiff = true) # share function
-				JuMP.register(:p_star,1,p_star,d_pstar_d_rho,d2_pstar_d2_rho) 
-				JuMP.register(:w_profit,2*(N-1),w_profit,wfocs!, autodiff = false)
+			catch e
+				if e.msg == "Operator share has already been defined"
+					ind = pop!(ReverseDiffSparse.univariate_operator_to_id, :share)
+					deleteat!(ReverseDiffSparse.univariate_operators,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_f,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_fprime,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_fprimeprime,ind)
+					JuMP.register(:share,1,share,autodiff = true) # share function
+				end
 			end
-			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_rel=1e-4, maxeval=1000)) #bad form, but needed for meta programming BS
+
+			try
+				JuMP.register(:p_star,1,p_star,d_pstar_d_rho,d2_pstar_d2_rho) 
+			catch e
+				if e.msg == "Operator p_star has already been defined"
+					ind = pop!(ReverseDiffSparse.univariate_operator_to_id, :p_star)
+					deleteat!(ReverseDiffSparse.univariate_operators,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_f,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_fprime,ind)
+					pop!(ReverseDiffSparse.user_univariate_operator_fprimeprime,ind)
+					JuMP.register(:p_star,1,p_star,d_pstar_d_rho,d2_pstar_d2_rho) 
+				end
+			end
+
+			try
+				JuMP.register(:w_profit,2*(N-1),w_profit,wfocs!, autodiff = false)
+			catch e
+				if e.msg == "Operator w_profit has already been defined"
+					ind = pop!(ReverseDiffSparse.operator_to_id, :w_profit)
+					pop!(ReverseDiffSparse.user_operator_map,ind)
+					JuMP.register(:w_profit,2*(N-1),w_profit,wfocs!, autodiff = false)
+				end
+			end
+
+
+			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=1e-6, ftol_rel=1e-6, maxeval=1000)) #bad form, but needed for meta programming BS
 			@variable(inner_m,inner_s[1:2*(N-1)])
 			global inner_s = inner_s #bad form, but needed for meta programming BS
 			
@@ -504,93 +566,17 @@ end
 			
 		end
 		function obj_func(omega::Vector, N::Int, W::Matrix)
-			tic()
 			rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N)
 			vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
 			res = vec*W*vec'
-			toc()
 			return res[1]
-		end
-		function Lobj_func(omega::Vector, N::Int, W::Matrix)
-			rho_hat,ff_hat,lambda_hat = Lprice_sched_calc(omega,N)
-			vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
-			res = vec*W*vec'
-			return res[1]
-		end
-
-		function uobj_func(omega::Vector, N::Int, W::Matrix)
-			# Omega should just be 2 long
-			hsrho,hsff,hslambda = Lprice_sched_calc([omega;log(1.0);log(1.0)],N)
-			hs = [hsrho[2:end],hslambda[2:end-1]]
-			rho_hat,ff_hat,lambda_hat = price_sched_calc([omega;log(1.0);log(1.0)],N)
-			vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
-			res = vec*W*vec'
-			return res[1]
-		end
-		function uLobj_func(omega::Vector, N::Int, W::Matrix)
-			# Omega should just be 2 long
-			rho_hat,ff_hat,lambda_hat = Lprice_sched_calc([omega;log(1.0);log(1.0)],N)
-			vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
-			res = vec*W*vec'
-			return res[1]
-		end
-		function uLobj_foc!(omega::Vector,obj_foc_mat,N::Integer,W::Matrix)
-			#column 1 is c, columns 2 is lambda ub
-			c = omega[1]
-			lambda_ub = omega[2]
-			temp_mat = zeros(2*N-3,2)
-			# A part for c
-			k = 1
-			A1 = -M*((LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1-2*k)))*(1-2*k)/(3-4*N) - (LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(2-2*k)))*(2-2*k)/(3-4*N))
-			k = 2
-			temp_mat[k+N-2,1] = -M*((LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1-2*k)))*(1-2*k)/(3-4*N) - (LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(2-2*k)))*(2-2*k)/(3-4*N)) + A1
-			for k = 3:N-1
-				temp_mat[k+N-2,1] = -M*((LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1-2*k)))*(1-2*k)/(3-4*N) - (LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(2-2*k)))*(2-2*k)/(3-4*N)) + temp_mat[k+N-3,1]
-			end
-			# A part for lambda_ub
-			k = 1
-			A1 = M*((LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1-2*k)))*(1-2*k)/(3-4*N) - (LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(2-2*k)))*(2-2*k)/(3-4*N))
-			k = 2
-			temp_mat[k+N-2,2] = M*((LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1-2*k)))*(1-2*k)/(3-4*N) - (LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(2-2*k)))*(2-2*k)/(3-4*N)) + A1
-			for k = 3:N-1
-				temp_mat[k+N-2,2] = M*((LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1-2*k)))*(1-2*k)/(3-4*N) - (LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(2-2*k)))*(2-2*k)/(3-4*N)) + temp_mat[k+N-3,2]
-			end
-			#rho part for c
-			for k = 1:N-1
-				temp_mat[k,1] = 2*(1-N-k)/(3-4*N)
-			end
-			#rho part for lambda_ub
-			for k = 1:N-1
-				temp_mat[k,2] = 1 - 2*(1-N-k)/(3-4*N)
-			end
-			#= above calculations produce G(omega) but need:
-				2G(omega)'Wg'
-			so we need to calculate the outcomes of relevance again=#
-			foc_ff_hat = zeros(N-1+1)
-			for k = 1:N-1
-				foc_ff_hat[k+1] = -M/(4*LB)*((LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1-2*k)))^2 - (LA + LB*(-LA/LB + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(2-2*k)))^2) + foc_ff_hat[k+1-1]
-			end
-			foc_rho_hat = zeros(N-1+1)
-			for k = 0:N-1
-				foc_rho_hat[k+1] = -LA/LB + lambda_ub + 2*(c + LA/LB - lambda_ub)/(3-4*N)*(1 - N - k)
-			end
-			vec = [(foc_rho_hat[2:end] - obs_rhos) ; (foc_ff_hat[3:end] - obs_ff[2:end])]'
-			res = (2.0*temp_mat'*W*vec')
-			for i in 1:size(res)[1] # rows
-				for j in 1:size(res)[2] # column
-					obj_foc_mat[i,j] = res[i,j]
-				end
-			end
-			
 		end
 
 		N = length(obs_rhos)+1
 		#W = eye(2*(N-1)- 1)
-		
 		# testing recovery of params with fake data
-				
 		println("Testing recovery of parameters with 'fake' data")
-		x0 = [5.0; log(10.0)]
+		x0 = [15.0; log(5.0)]
 		nlrho,nlff,nllamb = price_sched_calc(x0,N)
 		obs_rhos = nlrho[2:end]
 		obs_ff = [0.0;nlff[3:end]]
@@ -645,6 +631,7 @@ end
 
 		outtuple = (product,market,min_X[1], max_mc, 1.0, min_X[2], fit_ps)
 		return outtuple
+		
 	else
 		println("Product has no matching price data.")
 	end
@@ -654,11 +641,11 @@ df = readtable("../../demand_estimation/berry_logit/berry_logit.csv")
 
 tups = [] # market,product tuples to run estimation on
 
-#markets = convert(Vector, levels(df[:,:mkt]))
-markets = [11725]
+markets = convert(Vector, levels(df[:,:mkt]))
+#markets = [11725]
 for market in markets
-	#products = levels(df[df[:mkt] .== market, :product])
-	products = [350]
+	products = levels(df[df[:mkt] .== market, :product])
+	#products = [350]
 	for product in products
 		m = convert(Int,market)
 		p = convert(Int,product)
@@ -668,11 +655,8 @@ end
 
 total_tups = length(tups)
 println("Total estimates to produce: $total_tups")
-println(ss_est((11725,350)))
-#=
 csvfile = open("indirect_est.csv", "w")
 write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
 para_out = pmap(ss_est,tups)
 writedlm(csvfile,para_out,"|")
 close(csvfile)
-=#

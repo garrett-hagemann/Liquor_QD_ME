@@ -63,7 +63,16 @@ end
 	return dot(f_evals, weights)*(b-a)::Float64
 end
 
-
+@everywhere function powerset(a)
+	res = Any[]
+	for i = 1:length(a)
+		for j in combinations(a,i)
+			push!(res,j)
+		end
+	end
+	return res
+end
+		
 @everywhere function ss_est(mkt_prod_tup::Tuple)
 	market = mkt_prod_tup[1]
 	product = mkt_prod_tup[2]
@@ -102,7 +111,7 @@ end
 
 		#Grabbing market size. Needs to be the same as that used to estimate shares
 		#M = df[prod_bool,:M][1]
-		M = 1.0
+		M = 4000.0
 		prod_price = df[prod_bool, :price][1]
 
 		# lists of observed prices and quantities. Need these to calculate error using 
@@ -115,17 +124,17 @@ end
 
 		obs_rhos = dropna(convert(DataArray,df[prod_bool, rho_list])'[:,1]) #some goofy conversion to make the dropna work as expected
 		obs_cutoff_q = dropna(convert(DataArray,df[prod_bool, cutoff_q_list])'[:,1]) #same as above
-		obs_ff = [0.0] # first fixed fee is by definition
+		obs_ff = [0.0] # first fixed fee is by definition, and corresponds to A1
 		
 		max_rho = copy(maximum(obs_rhos))
 		max_mc = 15.0
 		# calculating series of A (intercepts of piecewise linear price schedules
-		# calculating tariff
 		for k = 2:length(obs_cutoff_q)
 			diff = (obs_cutoff_q[k] - 1)*(obs_rhos[k-1] - obs_rhos[k])
 			res = diff + obs_ff[k-1]
 			push!(obs_ff,res)
 		end
+
 
 		#Defining share function which is ONLY a function of price
 		function share(p)
@@ -146,21 +155,7 @@ end
 		dd_share(p) = ForwardDiff.derivative(d_share,p[1])
 		ddd_share(p) = ForwardDiff.derivative(dd_share,p[1])
 
-		### NLsolve pstar
-		#=	
-		function p_star(rho,l)
-			function g!(p,gvec)
-				gvec[1] =  (p - rho + l)*d_share(p)*M + share(p)*M
-			end
-			function gj!(p, gjvec)
-				gjvec[1] = (p - rho + l)*dd_share(p)*M + 2.0*d_share(p)*M
-			end
-			res = nlsolve(g!,gj!,[rho-l],show_trace = false, extended_trace = false, method = :trust_region) 
-			return res.zero[1]
-		end
-		=#	
 		### Optimizer pstar
-			
 		function p_star(rho)
 			function g(p::Float64) # retailer profit. Note that optimal p is independent of M and type
 				return -((p - rho)*share(p))[1] # Ignores fixed cost as it just shifts problem. Need the indexing for some reason in optimize
@@ -175,7 +170,6 @@ end
 			#poptim_res = optimize(uLg,focs!,ux0,BFGS(),OptimizationOptions(show_every = true, extended_trace = true, iterations = 1500, g_tol = 1e-6))
 			return Optim.minimizer(poptim_res)[1]
 		end
-
 		function d_pstar_d_rho(rho) 
 			u = p_star(rho)
 			res = d_share(u) ./ (dd_share(u)*(u - rho) + 2*d_share(u))
@@ -189,6 +183,15 @@ end
 			res = (num1 - num2)/(den^2)
 			return res
 		end
+		
+		# Given observed As and observed rhos, can calculate implied lambdas
+		obs_lambdas = [0.0] # corresponds to lambda1. Must be zero as A0 = 0 & A1 = 0
+		for k = 2:length(obs_rhos)
+			res = (obs_ff[k] - obs_ff[k-1])/(M*((p_star(obs_rhos[k]) - obs_rhos[k])*share(p_star(obs_rhos[k])) - (p_star(obs_rhos[k-1]) - obs_rhos[k-1])*share(p_star(obs_rhos[k-1]))))
+			push!(obs_lambdas,res)
+		end
+		M = 1
+
 		# Defining parameters for linear approx to demand to give hot start to non-linear version.
 		# apporximating demand around observed product price
 		LA = share(prod_price) - d_share(prod_price)*prod_price
@@ -565,73 +568,77 @@ end
 			return (est_rhos,est_ff,est_lambdas)
 			
 		end
-		function obj_func(omega::Vector, N::Int, W::Matrix)
-			rho_hat,ff_hat,lambda_hat = price_sched_calc(omega,N)
-			vec = [(rho_hat[2:end] - obs_rhos) ; (ff_hat[3:end] - obs_ff[2:end])]'
-			res = vec*W*vec'
-			return res[1]
+		function moment_obj_func(omega)
+			c = omega[1] # marginal cost for wholesaler
+			
+			a = 1.0 # first dist param
+			b = exp(omega[2]) # second dist param 
+			
+			lambda_lb = 0.0
+			lambda_ub = 1.0
+				
+			est_cdf(x) = cdf(Beta(a,b),x)
+			est_pdf(x) = pdf(Beta(a,b),x)
+			
+			rho_0 = 2.0*max_rho
+			
+			function w_profit(sched)
+				theta = collect(sched)
+				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
+				rho_vec = [rho_0 ; theta[1:N-1]]
+				profit = 0.0
+				for i = 1:N-1
+					k = i+1 # dealing with indexing
+					f(l) =  l*est_pdf(l)
+					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+					# Pre-calculating some stuff to avoid repeated calls to p_star
+					ps1 = p_star(rho_vec[k])
+					ps2 = p_star(rho_vec[k-1])
+					inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
+					profit = profit + inc
+				end
+				return profit
+			end
+			# Generating Deviations
+			dev_step = .2
+			dev_vec = []
+			ps_ind = powerset((1:length(obs_sched)))
+			for x in ps_ind # positive deviations
+				scale_vec = ones(length(obs_sched))
+				scale_vec[x] = scale_vec[x]+dev_step
+				push!(dev_vec,obs_sched.*scale_vec)
+			end
+			for x in ps_ind # negative deviations
+				scale_vec = ones(length(obs_sched))
+				scale_vec[x] = scale_vec[x]-dev_step
+				push!(dev_vec,obs_sched.*scale_vec)
+			end
+			dev_profit = map(w_profit,dev_vec)
+			obs_vec = fill(obs_sched,length(dev_vec))
+			obs_profit = map(w_profit,obs_vec)
+			profit_diff = obs_profit - dev_profit
+			profit_diff = convert(Array{Float64,1},profit_diff) # need to convert. Not sure why it's not typed above
+			min2_vec = min(0.0,profit_diff).^2
+			res = sum(min2_vec)
+			return res
 		end
 
 		N = length(obs_rhos)+1
-		#W = eye(2*(N-1)- 1)
+		
 		# testing recovery of params with fake data
 		println("Testing recovery of parameters with 'fake' data")
-		x0 = [15.0; log(5.0)]
+		x0 = [15.0; log(1.0)]
 		nlrho,nlff,nllamb = price_sched_calc(x0,N)
 		obs_rhos = nlrho[2:end]
-		obs_ff = [0.0;nlff[3:end]]
-		println(obs_rhos)
+		obs_ff = nlff[2:end]
+		obs_lambdas = nllamb[2:end-1]
+		obs_sched = [obs_rhos ; obs_lambdas]
+		println(obs_sched)
 		
-
-
-		#ux0 = [3.0,15.0]
-		W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-3)
-		# checking Objective func gradient
-		#eps = zeros(2)
-		#eps[1] = 1e-9
-		#println((uLobj_func(ux0+eps,N,W) - uLobj_func(ux0-eps,N,W))/(2*1e-9))
-		#jtest = zeros(2,1)
-		#uLobj_foc!(ux0,jtest,N,W)	
-		#println(jtest)
-		
-		# testing hot start
-		#x0 = [0.0; 2.0; log(1.0); log(1.0)]
-		#hsrho,hsff,hslambda = Lprice_sched_calc(x0,N)
-		#hs = [hsrho[2:end],hslambda[2:end-1]]
-		#println(Lprice_sched_calc(x0,5))
-		#println(price_sched_calc(x0,4))
-		#println(price_sched_calc(x0,N; hot_start = hs))
-		
-		# Optimizing uniform linear model	
-		#uLg(x) = uLobj_func(x,N,W)
-		#focs!(x,vec) = uLobj_foc!(x,vec,N,W)
-		#optim_res = optimize(uLg,focs!,ux0,BFGS(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-6))
-		#println(optim_res)
-		#min_X = Optim.minimizer(optim_res)
-		
-		outerg(x) = obj_func(x,N,W)
+		#W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-3)
+		println(moment_obj_func([12.0;log(30.0)]))
 			
-		# grid search
-		#grid_points = [[i,j,0.0,0.0] for i = 0.0:10.0, j = 2.0:2.0:20.0]
-		println("Starting initial grid search")
-		grid_points = [[i,l] for i = linspace(0,20,20), l=linspace(0.0,2.0,5)]
-		grid_evals = map(outerg,grid_points)
-		min_ind = indmin(grid_evals)
-		x0 = grid_points[min_ind]
-		println("Best Starting Guess from grid: ",x0)
-		
-		outerg(x) = obj_func(x,N,W)
-		#x0 = [2.0; 11.0; log(1.0); log(1.0)]
-		optim_res = Optim.optimize(outerg,x0,NelderMead(),OptimizationOptions(show_every = false, extended_trace = false, iterations = 1500, g_tol = 1e-8))
-		println(optim_res)
-		min_X = Optim.minimizer(optim_res)
-		hsrho,hsff,hslambda = Lprice_sched_calc(min_X,N)
-		hs = [hsrho[2:end];hslambda[2:end-1]]
-		fit_ps = price_sched_calc(min_X,N)
-
-		outtuple = (product,market,min_X[1], max_mc, 1.0, min_X[2], fit_ps)
-		return outtuple
-		
+		return 1
 	else
 		println("Product has no matching price data.")
 	end
@@ -641,11 +648,11 @@ df = readtable("../../demand_estimation/berry_logit/berry_logit.csv")
 
 tups = [] # market,product tuples to run estimation on
 
-markets = convert(Vector, levels(df[:,:mkt]))
-#markets = [11725]
+#markets = convert(Vector, levels(df[:,:mkt]))
+markets = [11725]
 for market in markets
-	products = levels(df[df[:mkt] .== market, :product])
-	#products = [350]
+	#products = levels(df[df[:mkt] .== market, :product])
+	products = [350]
 	for product in products
 		m = convert(Int,market)
 		p = convert(Int,product)

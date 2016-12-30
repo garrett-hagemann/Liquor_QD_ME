@@ -15,7 +15,6 @@ function isless(x::Array{Float64,1},y::Array{Float64,1})
 end
 
 srand(69510606) #seeding random number gen
-
 #=
 df = readtable("../../demand_estimation/berry_logit/berry_logit.csv")
 char_list = [:price, :d_gin, :d_vod, :d_rum, :d_sch, :d_brb, :d_whs, :holiday]
@@ -111,7 +110,8 @@ end
 
 		#Grabbing market size. Needs to be the same as that used to estimate shares
 		#M = df[prod_bool,:M][1]
-		M = 4000.0
+		M = 3000
+		tol = 1e-16*M # tolerance for price schedule optimization solution
 		prod_price = df[prod_bool, :price][1]
 
 		# lists of observed prices and quantities. Need these to calculate error using 
@@ -190,7 +190,7 @@ end
 			res = (obs_ff[k] - obs_ff[k-1])/(M*((p_star(obs_rhos[k]) - obs_rhos[k])*share(p_star(obs_rhos[k])) - (p_star(obs_rhos[k-1]) - obs_rhos[k-1])*share(p_star(obs_rhos[k-1]))))
 			push!(obs_lambdas,res)
 		end
-		M = 1
+		#M = 1
 
 		# Defining parameters for linear approx to demand to give hot start to non-linear version.
 		# apporximating demand around observed product price
@@ -300,26 +300,24 @@ end
 			end
 			rho_start = convert(Array{Float64,1},[urho(k) for k = 1:N-1])
 			lambda_start = convert(Array{Float64,1},[ulambda(k) for k = 1:N-1])	
-			innerx0 = [rho_start;lambda_start]
-			#innerx0 = [1.0, 0.75, 0.5, 0.3, 0.6, 0.9] + 0*randn(2*(N-1))
+			innerx0 = [20.0, 10.0, 5.0, 0.3, 0.6, 0.9]
 			# checking hessian and gradient
-			#=
+			#=	
 			println(innerx0)
-			
 			gtest1 = ones(2*(N-1))
 			gtest2 = ones(2*(N-1))
 			htest = ones(2*(N-1),2*(N-1))
 			eps = zeros(2*(N-1)) 
 			step = 1e-9
-			eps[4] = step
-			est_grad = (Lw_profit(innerx0+eps) - Lw_profit(innerx0-eps))/(2*step)
+			eps[1] = step
+			upx = innerx0 + eps
+			downx = innerx0 - eps
+			est_grad = (Lw_profit(upx...) - Lw_profit(downx...))/(2*step)
 			println("Numerical grad: ", est_grad)
-			Lwfocs!(innerx0,gtest1)
+			Lwfocs!(gtest1,innerx0...)
 			println(gtest1)
-
-			solution = 1
-			return solution
 			=#
+
 			# Solving problem numerically. Using JuMP modeling language
 			try
 				JuMP.register(:Lshare,1,Lshare,autodiff = true) # share function
@@ -356,12 +354,16 @@ end
 					JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
 				end
 			end
-			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=1e-6, ftol_rel=1e-6, maxeval = 1000)) #bad form, but needed for meta programming BS
+			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, xtol_abs = tol, xtol_rel = tol, maxeval = 1000)) #bad form, but needed for meta programming BS
 			@variable(Linner_m,Linner_s[1:2*(N-1)])
 			global Linner_s = Linner_s #bad form, but needed for meta programming BS
 			for k = 1:N-1 
 				setvalue(Linner_s[k],urho(k)) # setting rho starting values
 				setvalue(Linner_s[N-1+k],ulambda(k)) # setting lambda starting values
+			end
+			for k = 1:N-1 # setting bounds on lambda
+				setlowerbound(Linner_s[N-1+k],0.0)
+				setupperbound(Linner_s[N-1+k],1.0)
 			end
 			if constrained == 1
 				@NLconstraint(Linner_m,cons1,Linner_s[N]*Lshare(Lp_star(Linner_s[1])) == 0)
@@ -447,8 +449,8 @@ end
 					ps1 = p_star(rho_vec[k])
 					ps2 = p_star(rho_vec[k-1])
 					#rho FOC
-						term1 = ((rho_vec[k] - c)*M*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + M*share(ps1))*int
-						term2 = ((ps1 - rho_vec[k])*M*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + M*share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+						term1 = ((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*int*M
+						term2 = ((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))*M
 						term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 						res = term1 + term2*term3
 						wfocs_vec[i] = -res
@@ -470,26 +472,22 @@ end
 					
 				end
 			end
-			innerx0 = [1.0, 0.75, 0.5, 0.3, 0.6, 0.9]
+			innerx0 = [20.0, 10.0, 5.0, 0.3, 0.6, 0.9]
 			# checking hessian and gradient
 			#=		
 			println(innerx0)
-			
 			gtest1 = ones(2*(N-1))
 			gtest2 = ones(2*(N-1))
 			htest = ones(2*(N-1),2*(N-1))
 			eps = zeros(2*(N-1)) 
 			step = 1e-9
-			eps[6] = step
+			eps[3] = step
 			upx = innerx0 + eps
 			downx = innerx0 - eps
 			est_grad = (w_profit(upx...) - w_profit(downx...))/(2*step)
 			println("Numerical grad: ", est_grad)
 			wfocs!(gtest1,innerx0...)
 			println(gtest1)
-
-			solution = 1
-			return solution
 			=#
 			# Solving problem numerically. Using JuMP modeling language
 			try
@@ -529,7 +527,7 @@ end
 			end
 
 
-			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=1e-6, ftol_rel=1e-6, maxeval=1000)) #bad form, but needed for meta programming BS
+			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, xtol_abs = tol, xtol_rel = tol, maxeval = 1000)) #bad form, but needed for meta programming BS
 			@variable(inner_m,inner_s[1:2*(N-1)])
 			global inner_s = inner_s #bad form, but needed for meta programming BS
 			
@@ -538,6 +536,10 @@ end
 			for k = 1:N-1 
 				setvalue(inner_s[k],Lrho[k+1]) # setting rho starting values
 				setvalue(inner_s[N-1+k],Llambda[k+1]) # setting lambda starting values
+			end
+			for k = 1:N-1 # setting bounds on lambda
+				setlowerbound(inner_s[N-1+k],0.0)
+				setupperbound(inner_s[N-1+k],1.0)
 			end
 			if constrained == 1
 				@NLconstraint(inner_m,cons1,inner_s[N]*share(p_star(inner_s[1])) == 0)
@@ -628,7 +630,7 @@ end
 		# testing recovery of params with fake data
 		println("Testing recovery of parameters with 'fake' data")
 		x0 = [15.0; log(1.0)]
-		nlrho,nlff,nllamb = price_sched_calc(x0,N)
+		nlrho,nlff,nllamb = price_sched_calc(x0,N) # repeated calls give slightly different answers. Can't track down the bug
 		obs_rhos = nlrho[2:end]
 		obs_ff = nlff[2:end]
 		obs_lambdas = nllamb[2:end-1]

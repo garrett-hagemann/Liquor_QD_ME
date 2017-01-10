@@ -1,4 +1,4 @@
-@everywhere using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Distributions, Optim, NLopt, JuMP
+@everywhere using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Distributions, Optim, NLopt, JuMP, Iterators
 
 #= goofy conversion magic =#
 import Base.convert
@@ -354,7 +354,7 @@ end
 					JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
 				end
 			end
-			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, xtol_abs = tol, xtol_rel = tol, maxeval = 1000)) #bad form, but needed for meta programming BS
+			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, maxeval = 1000)) #bad form, but needed for meta programming BS
 			@variable(Linner_m,Linner_s[1:2*(N-1)])
 			global Linner_s = Linner_s #bad form, but needed for meta programming BS
 			for k = 1:N-1 
@@ -377,7 +377,7 @@ end
 			obj_str = obj_str[1:end-1] # removing last comma
 			obj_str = obj_str * "))" # closing parens
 			eval(parse(obj_str))
-			inner_sol = solve(Linner_m)
+			solve(Linner_m)
 			sol_sched = getvalue(Linner_s)
 			
 			est_rhos = [rho_0 ; sol_sched[1:N-1]]
@@ -527,7 +527,7 @@ end
 			end
 
 
-			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, xtol_abs = tol, xtol_rel = tol, maxeval = 1000)) #bad form, but needed for meta programming BS
+			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, maxeval = 1000)) #bad form, but needed for meta programming BS
 			@variable(inner_m,inner_s[1:2*(N-1)])
 			global inner_s = inner_s #bad form, but needed for meta programming BS
 			
@@ -553,7 +553,7 @@ end
 			obj_str = obj_str[1:end-1] # removing last comma
 			obj_str = obj_str * "))" # closing parens
 			eval(parse(obj_str))
-			inner_sol = solve(inner_m)
+			solve(inner_m)
 			sol_sched = getvalue(inner_s)
 			
 			est_rhos = [rho_0 ; sol_sched[1:N-1]]
@@ -570,7 +570,34 @@ end
 			return (est_rhos,est_ff,est_lambdas)
 			
 		end
-		function moment_obj_func(omega)
+		
+
+		obs_N = length(obs_rhos)+1
+		# testing recovery of params with fake data
+		println("Testing recovery of parameters with 'fake' data")
+		x0 = [5.0; log(3.0)]
+		nlrho,nlff,nllamb = price_sched_calc(x0,obs_N) # repeated calls give slightly different answers. Can't track down the bug
+		obs_rhos = nlrho[2:end]
+		obs_ff = nlff[2:end]
+		obs_lambdas = nllamb[2:end-1]
+		obs_sched = [obs_rhos ; obs_lambdas]
+		println(obs_sched)
+		
+		# Generating Deviations. Same for all params, so only do once.
+		dev_step = .2
+		dev_steps = [1.0+dev_step, 1.0, 1.0-dev_step]
+		cart_prod_arg = fill(dev_steps,2*(obs_N-1))
+		dev_cart_prod = collect(Iterators.product(cart_prod_arg...)) # need to specify Iterators. here because I use product as another symbol
+		dev_cart_array = map(collect,dev_cart_prod)
+		filter!(x->x!=ones(2*(obs_N-1)),dev_cart_array) # removing no-deviation vector. Just a by product of above proceedure
+		dev_sched_vec =  map(x->obs_sched.*x,dev_cart_array)
+		dev_pstar_vec = []
+		for s in dev_sched_vec
+			push!(dev_pstar_vec,map(p_star,[2*max_rho;s[1:obs_N-1]]))
+		end
+			
+		function moment_obj_func(params...)
+			omega = collect(params)
 			c = omega[1] # marginal cost for wholesaler
 			
 			a = 1.0 # first dist param
@@ -584,62 +611,100 @@ end
 			
 			rho_0 = 2.0*max_rho
 			
-			function w_profit(sched)
+			function w_profit(sched, p_star_pre = Float64[])
 				theta = collect(sched)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]]
+				lambda_vec = [lambda_lb; theta[obs_N:end]; lambda_ub] 
+				rho_vec = [rho_0 ; theta[1:obs_N-1]]
 				profit = 0.0
-				for i = 1:N-1
+				for i = 1:obs_N-1
 					k = i+1 # dealing with indexing
 					f(l) =  l*est_pdf(l)
 					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
 					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = p_star(rho_vec[k])
-					ps2 = p_star(rho_vec[k-1])
+					if length(p_star_pre) == 0
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+					else
+						ps1 = p_star_pre[k]
+						ps2 = p_star_pre[k-1] # note that p_star_re should include p_star(rho_0)
+					end
 					inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
 					profit = profit + inc
 				end
 				return profit
 			end
-			# Generating Deviations
-			dev_step = .2
-			dev_vec = []
-			ps_ind = powerset((1:length(obs_sched)))
-			for x in ps_ind # positive deviations
-				scale_vec = ones(length(obs_sched))
-				scale_vec[x] = scale_vec[x]+dev_step
-				push!(dev_vec,obs_sched.*scale_vec)
-			end
-			for x in ps_ind # negative deviations
-				scale_vec = ones(length(obs_sched))
-				scale_vec[x] = scale_vec[x]-dev_step
-				push!(dev_vec,obs_sched.*scale_vec)
-			end
-			dev_profit = map(w_profit,dev_vec)
-			obs_vec = fill(obs_sched,length(dev_vec))
-			obs_profit = map(w_profit,obs_vec)
-			profit_diff = obs_profit - dev_profit
+			dev_profit = map(w_profit,dev_sched_vec,dev_pstar_vec)
+			obs_profit = w_profit(obs_sched)
+			obs_vec = fill(obs_profit,length(dev_sched_vec))
+			profit_diff = obs_vec - dev_profit
 			profit_diff = convert(Array{Float64,1},profit_diff) # need to convert. Not sure why it's not typed above
-			min2_vec = min(0.0,profit_diff).^2
+			profit_diff[obs_vec .< 0.0] = -99999.0 # if profit < 0 with observed sched, then it must violate model. setting to large value
+			min2_vec = min(0.0,profit_diff).^2.0
 			res = sum(min2_vec)
 			return res
 		end
+		
+		function ∇moment_obj_func(grad,params...)
+			eps = 1e-9
 
-		N = length(obs_rhos)+1
-		
-		# testing recovery of params with fake data
-		println("Testing recovery of parameters with 'fake' data")
-		x0 = [15.0; log(1.0)]
-		nlrho,nlff,nllamb = price_sched_calc(x0,N) # repeated calls give slightly different answers. Can't track down the bug
-		obs_rhos = nlrho[2:end]
-		obs_ff = nlff[2:end]
-		obs_lambdas = nllamb[2:end-1]
-		obs_sched = [obs_rhos ; obs_lambdas]
-		println(obs_sched)
-		
-		#W = Diagonal([1./(obs_rhos.^2) ; 1./(obs_ff[2:end].^2)])*eye(2*N-3)
-		println(moment_obj_func([12.0;log(30.0)]))
+			grad[1] = (moment_obj_func(params[1] + eps,params[2]) - moment_obj_func(params[1] - eps,params[2]))/(2*eps)
+			grad[2] = (moment_obj_func(params[1],params[2]+eps) - moment_obj_func(params[1],params[2]-eps))/(2*eps)
+		end
+		# grid search approach	
+		#=
+		csvfile = open("moment_$market"*"_$product.csv", "w")
+		write(csvfile, "c,b,Q\n")
+		for i in linspace(0.0,20.0,100)
+			for j in linspace(0.0,3.0,100)
+				res = join([i,j,moment_obj_func([i;j]...)],",")
+				print(".")
+				write(csvfile,res,"\n")
+				flush(csvfile)
+			end
+			println("\n")
+		end
+		close(csvfile)
+		=#	
 			
+		#constrained min approach as in PPHI
+		JuMP.register(:moment_obj_func, 2, moment_obj_func, ∇moment_obj_func,autodiff = false)
+		tol = 1e-3
+		tic()
+		m_moment = Model(solver=NLoptSolver(algorithm=:LD_MMA, ftol_abs=tol, ftol_rel=tol,maxeval = 6000, maxtime=60))
+		@variable(m_moment, moment_c >=0.0, start=1.0)
+		@variable(m_moment, moment_b >=0.0, start=0.0)
+		@NLconstraint(m_moment, moment_obj_func(moment_c,moment_b) <=  1e-6 )
+		@NLobjective(m_moment,Max,moment_b)
+		solve(m_moment)
+		ub_b = getvalue(moment_b)
+		setvalue(moment_b,0.0)
+		setvalue(moment_c,1.0)
+		@NLobjective(m_moment,Max,moment_c)
+		solve(m_moment)
+		ub_c = getvalue(moment_c)
+		setvalue(moment_b,0.0)
+		setvalue(moment_c,1.0)
+		@NLobjective(m_moment,Min,moment_b)
+		solve(m_moment)
+		lb_b = getvalue(moment_b)
+		setvalue(moment_b,0.0)
+		setvalue(moment_c,1.0)
+		@NLobjective(m_moment,Min,moment_c)
+		solve(m_moment)
+		lb_c = getvalue(moment_c)
+		setvalue(moment_b,0.0)
+		setvalue(moment_c,1.0)
+		println([lb_b,ub_b,lb_c,ub_c])	
+		toc()	
+	
+		# finding xi param (cost of additional segment)
+		mid_c = (lb_c + ub_c)/2.0
+		mid_b = (lb_b + ub_b)/2.0
+		println([mid_c,mid_b])
+		sched_less = price_sched_calc([mid_c,mid_b],obs_N-1)
+		println(sched_less)
+		sched_more = price_sched_calc([mid_c,mid_b],obs_N+1)
+		println(sched_more)
 		return 1
 	else
 		println("Product has no matching price data.")
@@ -664,8 +729,5 @@ end
 
 total_tups = length(tups)
 println("Total estimates to produce: $total_tups")
-csvfile = open("indirect_est.csv", "w")
-write(csvfile, "product,mkt,c,lambda_ub,a,b,price_sched\n")
-para_out = pmap(ss_est,tups)
-writedlm(csvfile,para_out,"|")
-close(csvfile)
+ss_est((11725,350))
+#para_out = pmap(ss_est,tups)

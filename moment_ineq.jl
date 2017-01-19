@@ -1,5 +1,5 @@
-@everywhere using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Distributions, Optim, NLopt, JuMP, Iterators
-
+@everywhere using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Distributions, Optim, JuMP, Iterators, Ipopt, NLopt
+EnableNLPResolve()
 #= goofy conversion magic =#
 import Base.convert
 function convert(t::Type{Float64},x::Array{Float64,1})
@@ -112,6 +112,7 @@ end
 		#M = df[prod_bool,:M][1]
 		M = 3000
 		tol = 1e-16*M # tolerance for price schedule optimization solution
+		inner_tol = 1e-2 # tolerance for price schedule optimization solution
 		prod_price = df[prod_bool, :price][1]
 
 		# lists of observed prices and quantities. Need these to calculate error using 
@@ -190,6 +191,8 @@ end
 			res = (obs_ff[k] - obs_ff[k-1])/(M*((p_star(obs_rhos[k]) - obs_rhos[k])*share(p_star(obs_rhos[k])) - (p_star(obs_rhos[k-1]) - obs_rhos[k-1])*share(p_star(obs_rhos[k-1]))))
 			push!(obs_lambdas,res)
 		end
+		obs_sched = [obs_rhos;obs_lambdas]
+		println(obs_sched)
 		#M = 1
 
 		# Defining parameters for linear approx to demand to give hot start to non-linear version.
@@ -300,7 +303,7 @@ end
 			end
 			rho_start = convert(Array{Float64,1},[urho(k) for k = 1:N-1])
 			lambda_start = convert(Array{Float64,1},[ulambda(k) for k = 1:N-1])	
-			innerx0 = [20.0, 10.0, 5.0, 0.3, 0.6, 0.9]
+			innerx0 = [rho_start ; lambda_start] + 1*randn(2*(N-1))
 			# checking hessian and gradient
 			#=	
 			println(innerx0)
@@ -309,7 +312,7 @@ end
 			htest = ones(2*(N-1),2*(N-1))
 			eps = zeros(2*(N-1)) 
 			step = 1e-9
-			eps[1] = step
+			eps[5] = step
 			upx = innerx0 + eps
 			downx = innerx0 - eps
 			est_grad = (Lw_profit(upx...) - Lw_profit(downx...))/(2*step)
@@ -354,7 +357,9 @@ end
 					JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
 				end
 			end
-			global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, maxeval = 1000)) #bad form, but needed for meta programming BS
+			global Linner_m = nothing # resetting for succsessive runs
+			#global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, xtol_abs = tol, xtol_rel = tol)) #bad form, but needed for meta programming BSa
+			global Linner_m = Model(solver=IpoptSolver(tol=inner_tol,print_level=0)) #bad form, but needed for meta programming BSa
 			@variable(Linner_m,Linner_s[1:2*(N-1)])
 			global Linner_s = Linner_s #bad form, but needed for meta programming BS
 			for k = 1:N-1 
@@ -362,13 +367,15 @@ end
 				setvalue(Linner_s[N-1+k],ulambda(k)) # setting lambda starting values
 			end
 			for k = 1:N-1 # setting bounds on lambda
+				setlowerbound(Linner_s[k],0.0)
+				setupperbound(Linner_s[k],rho_0)
 				setlowerbound(Linner_s[N-1+k],0.0)
 				setupperbound(Linner_s[N-1+k],1.0)
 			end
 			if constrained == 1
 				@NLconstraint(Linner_m,cons1,Linner_s[N]*Lshare(Lp_star(Linner_s[1])) == 0)
+				#setupperbound(Linner_s[N],0.0)
 			end
-		
 			# defining objective function. Need to use meta-programming BS to get around syntax limitations
 			obj_str = "@NLobjective(Linner_m, Min, Lw_profit("
 			for i = 1:2*(N-1)
@@ -526,18 +533,25 @@ end
 				end
 			end
 
-
-			global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, maxeval = 1000)) #bad form, but needed for meta programming BS
+			global inner_m = nothing # resetting for succsessive runs
+			#global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, xtol_abs = tol, xtol_rel=tol)) #bad form, but needed for meta programming BS
+			global inner_m = Model(solver=IpoptSolver(tol=inner_tol, print_level=0 )) #bad form, but needed for meta programming BS
 			@variable(inner_m,inner_s[1:2*(N-1)])
 			global inner_s = inner_s #bad form, but needed for meta programming BS
 			
-			# setting starting values. Using solution to linear model as hot start
-			(Lrho,Lff,Llambda) = Lprice_sched_calc(params,N)
+			# setting starting values. The solution process is as follows:
+			#	1) Solve linear-uniform model as  hot start for non-linear uniform model
+			#	2) Solve non-linear uniform model as hot start for non-uniform non-linear model
+			# This helps better condition the solution process, which appears divergent in some cases for unkown reasons
+	
+			(Lrho,Lff,Llambda) = Lprice_sched_calc([c;0.0],N) # linear hot start
 			for k = 1:N-1 
 				setvalue(inner_s[k],Lrho[k+1]) # setting rho starting values
 				setvalue(inner_s[N-1+k],Llambda[k+1]) # setting lambda starting values
 			end
-			for k = 1:N-1 # setting bounds on lambda
+			for k = 1:N-1 # setting bounds
+				#setlowerbound(inner_s[k],0.0)
+				#setupperbound(inner_s[k],rho_0)
 				setlowerbound(inner_s[N-1+k],0.0)
 				setupperbound(inner_s[N-1+k],1.0)
 			end
@@ -553,9 +567,11 @@ end
 			obj_str = obj_str[1:end-1] # removing last comma
 			obj_str = obj_str * "))" # closing parens
 			eval(parse(obj_str))
-			solve(inner_m)
+			b=1.0 # Uniform non-linear hot start
+			solve(inner_m) # Uniform non-linear hot start
+			b=exp(params[2]) # Acutal solution
+			solve(inner_m) # Actual solution
 			sol_sched = getvalue(inner_s)
-			
 			est_rhos = [rho_0 ; sol_sched[1:N-1]]
 			est_lambdas = [lambda_lb ; sol_sched[N:end] ; lambda_ub]
 
@@ -574,15 +590,17 @@ end
 
 		obs_N = length(obs_rhos)+1
 		# testing recovery of params with fake data
+		#=	
 		println("Testing recovery of parameters with 'fake' data")
 		x0 = [5.0; log(3.0)]
+			
 		nlrho,nlff,nllamb = price_sched_calc(x0,obs_N) # repeated calls give slightly different answers. Can't track down the bug
 		obs_rhos = nlrho[2:end]
 		obs_ff = nlff[2:end]
 		obs_lambdas = nllamb[2:end-1]
 		obs_sched = [obs_rhos ; obs_lambdas]
 		println(obs_sched)
-		
+		=#
 		# Generating Deviations. Same for all params, so only do once.
 		dev_step = .2
 		dev_steps = [1.0+dev_step, 1.0, 1.0-dev_step]
@@ -650,30 +668,43 @@ end
 			grad[1] = (moment_obj_func(params[1] + eps,params[2]) - moment_obj_func(params[1] - eps,params[2]))/(2*eps)
 			grad[2] = (moment_obj_func(params[1],params[2]+eps) - moment_obj_func(params[1],params[2]-eps))/(2*eps)
 		end
+		
 		# grid search approach	
-		#=
+		c_grid = 1:.5:100
+		b_grid = linspace(-5.0,5.0,20)
+		Q_eval = Array{Float64}(0,3)
+		for c in c_grid
+			for b in b_grid
+				q = moment_obj_func(c,b)
+				res = [c b q]
+				Q_eval = [Q_eval ; res]
+			end
+		end
 		csvfile = open("moment_$market"*"_$product.csv", "w")
 		write(csvfile, "c,b,Q\n")
-		for i in linspace(0.0,20.0,100)
-			for j in linspace(0.0,3.0,100)
-				res = join([i,j,moment_obj_func([i;j]...)],",")
-				print(".")
-				write(csvfile,res,"\n")
-				flush(csvfile)
-			end
-			println("\n")
-		end
+		writedlm(csvfile,Q_eval,',')
 		close(csvfile)
-		=#	
+		#min_q_ind = findin(Q_eval[:,3],minimum(Q_eval[:,3]))
+		min_q = minimum(Q_eval[:,3])
+		min_q_ind = find(Q_eval[:,3] .<= 1e-6)
+		feas_c = Q_eval[min_q_ind,1]
+		feas_b = Q_eval[min_q_ind,2]
+		c_ub = maximum(feas_c)
+		c_lb = minimum(feas_c)
+		b_ub = maximum(feas_b)
+		b_lb = minimum(feas_b)
+		println([c_lb,c_ub,b_lb,b_ub])
 			
+		#=
 		#constrained min approach as in PPHI
 		JuMP.register(:moment_obj_func, 2, moment_obj_func, ∇moment_obj_func,autodiff = false)
-		tol = 1e-3
+		outer_tol = 1e-3
 		tic()
-		m_moment = Model(solver=NLoptSolver(algorithm=:LD_MMA, ftol_abs=tol, ftol_rel=tol,maxeval = 6000, maxtime=60))
-		@variable(m_moment, moment_c >=0.0, start=1.0)
-		@variable(m_moment, moment_b >=0.0, start=0.0)
-		@NLconstraint(m_moment, moment_obj_func(moment_c,moment_b) <=  1e-6 )
+		#m_moment = Model(solver=NLoptSolver(algorithm=:LD_MMA, ftol_abs=outer_tol, ftol_rel=outer_tol,maxeval = 6000, maxtime=60))
+		m_moment = Model(solver=IpoptSolver(tol=outer_tol,print_level=5))
+		@variable(m_moment, 0.0 <= moment_c <= 1000.0, start=1.0)
+		@variable(m_moment, 0.0 <= moment_b <= 10.0, start=0.0)
+		@NLconstraint(m_moment, moment_obj_func(moment_c,moment_b) <= 1e-16)
 		@NLobjective(m_moment,Max,moment_b)
 		solve(m_moment)
 		ub_b = getvalue(moment_b)
@@ -696,15 +727,83 @@ end
 		setvalue(moment_c,1.0)
 		println([lb_b,ub_b,lb_c,ub_c])	
 		toc()	
-	
+		=#
+			
 		# finding xi param (cost of additional segment)
-		mid_c = (lb_c + ub_c)/2.0
-		mid_b = (lb_b + ub_b)/2.0
+		mid_c = (c_lb + c_ub)/2.0
+		mid_b = (b_lb + b_ub)/2.0
 		println([mid_c,mid_b])
-		sched_less = price_sched_calc([mid_c,mid_b],obs_N-1)
-		println(sched_less)
-		sched_more = price_sched_calc([mid_c,mid_b],obs_N+1)
-		println(sched_more)
+		eq_ps = price_sched_calc([mid_c,mid_b], obs_N)
+		more_ps = price_sched_calc([mid_c,mid_b], obs_N+1)
+		less_ps = price_sched_calc([mid_c,mid_b],obs_N-1)
+		less_rho = less_ps[1]
+		less_ff = less_ps[2]
+		less_lambda = less_ps[3]
+		less_sched = [less_rho[2:end] ; less_lambda[2:end-1]]
+		more_rho = more_ps[1]
+		more_ff = more_ps[2]
+		more_lambda = more_ps[3]
+		more_sched = [more_rho[2:end] ; more_lambda[2:end-1]]
+		eq_rho = eq_ps[1]
+		eq_ff = eq_ps[2]
+		eq_lambda = eq_ps[3]
+		eq_sched = [eq_rho[2:end] ; eq_lambda[2:end-1]]
+		
+		function out_w_profit(sched, p_star_pre = Float64[])
+			c = mid_c # marginal cost for wholesaler
+			
+			a = 1.0 # first dist param
+			b = exp(mid_b) # second dist param 
+			
+			lambda_lb = 0.0
+			lambda_ub = 1.0
+
+			N = div(length(sched),2) + 1 # integer division
+				
+			est_cdf(x) = cdf(Beta(a,b),x)
+			est_pdf(x) = pdf(Beta(a,b),x)
+			
+			rho_0 = 2.0*max_rho
+			theta = collect(sched)
+			lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
+			rho_vec = [rho_0 ; theta[1:N-1]]
+			profit = 0.0
+			for i = 1:N-1
+				k = i+1 # dealing with indexing
+				f(l) =  l*est_pdf(l)
+				int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+				# Pre-calculating some stuff to avoid repeated calls to p_star
+				if length(p_star_pre) == 0
+					ps1 = p_star(rho_vec[k])
+					ps2 = p_star(rho_vec[k-1])
+				else
+					ps1 = p_star_pre[k]
+					ps2 = p_star_pre[k-1] # note that p_star_re should include p_star(rho_0)
+				end
+				inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
+				profit = profit + inc
+			end
+			return profit
+		end
+		eq_profit = out_w_profit(eq_sched)
+		less_profit = out_w_profit(less_sched)
+		more_profit = out_w_profit(more_sched)
+		xi_ub = eq_profit - less_profit
+		xi_lb = more_profit - eq_profit
+		println([xi_lb,xi_ub])
+		mid_xi = (xi_lb + xi_ub)/2
+		println(mid_xi)
+		lin_ps = price_sched_calc([mid_c,mid_b],2)
+		lin_rho = lin_ps[1]
+		lin_ff = lin_ps[2]
+		lin_lambda = lin_ps[3]
+		lin_sched = [lin_rho[2:end] ; lin_lambda[2:end-1]]
+		lin_profit = out_w_profit(lin_sched)
+
+		Δw_profit = ((lin_profit-2*mid_xi) - (eq_profit - obs_N*mid_xi))/(eq_profit - obs_N*mid_xi)
+		println(Δw_profit)
+		
+		
 		return 1
 	else
 		println("Product has no matching price data.")

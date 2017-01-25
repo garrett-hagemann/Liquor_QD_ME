@@ -335,13 +335,13 @@ end
 					ps2 = Lp_star(rho_vec[k-1])
 					for j = 1:N-1
 						if j == i
-							term1 = M*((rho_vec[k] - c)*Ld_share(ps1) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
 							term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
 							term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
 							res = term1 + term2*term3
 							whess_mat[i,j+N-1] = -res
 						elseif j == i+1
-							term1 = M*((rho_vec[k] - c)*Ld_share(ps1) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+							term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
 							term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
 							term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
 							res = term1 + term2*(-1)*term3
@@ -386,7 +386,7 @@ end
 			lambda_start = convert(Array{Float64,1},[ulambda(k) for k = 1:N-1])	
 			innerx0 = [rho_start ; lambda_start] + 1*randn(2*(N-1))
 			# checking hessian and gradient
-					
+				
 			innerx0 = [20.0, 10.0, 5.0, 0.3, 0.6, 0.9]
 			println(innerx0)
 			gtest1 = ones(2*(N-1))
@@ -394,7 +394,7 @@ end
 			htest = ones(2*(N-1),2*(N-1))
 			eps = zeros(2*(N-1)) 
 			step = 1e-9
-			eps[6]= step
+			eps[4]= step
 			upx = innerx0 + eps
 			downx = innerx0 - eps
 			est_grad = (Lw_profit(upx...) - Lw_profit(downx...))/(2*step)
@@ -407,6 +407,7 @@ end
 			Lwhess!(htest,innerx0)
 			println("Numerical Hessian: ", (gtest1 - gtest2)/(2*step))
 			println(htest)
+			
 			#=
 			# Solving problem numerically. Using JuMP modeling language
 			try
@@ -601,13 +602,13 @@ end
 					ps2 = p_star(rho_vec[k-1])
 					for j = 1:N-1
 						if j == i
-							term1 = M*((rho_vec[k] - c)*d_share(ps1) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
 							term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
 							term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
 							res = term1 + term2*term3
 							whess_mat[i,j+N-1] = -res
 						elseif j == i+1
-							term1 = M*((rho_vec[k] - c)*d_share(ps1) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+							term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
 							term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
 							term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
 							res = term1 + term2*(-1)*term3
@@ -657,7 +658,7 @@ end
 			htest = ones(2*(N-1),2*(N-1))
 			eps = zeros(2*(N-1)) 
 			step = 1e-9
-			eps[6] = step
+			eps[4] = step
 			upx = innerx0 + eps
 			downx = innerx0 - eps
 			est_grad = (w_profit(upx...) - w_profit(downx...))/(2*step)
@@ -765,8 +766,8 @@ end
 		
 
 		obs_N = length(obs_rhos)+1
-		println(Lprice_sched_calc([5.0;log(3.0)],obs_N))
-		println(price_sched_calc([5.0;log(3.0)],obs_N))
+		println(Lprice_sched_calc([5.0;log(1.0)],obs_N))
+		println(price_sched_calc([5.0;log(1.0)],obs_N))
 		#=
 		# testing recovery of params with fake data
 		#=	

@@ -238,7 +238,7 @@ end
 			est_pdf(x) = pdf(Beta(a,b),x)
 			d_est_pdf(x) = est_pdf(x)*((a + b - 2)*x - (a-1))/((x-1)*x)
 		
-			if (constrained == 1)	
+			if (constrained == 1) # contrained => A1 = 0 <=> lambda_1 = 0
 				function urho(k::Integer)
 					return -LA/LB + (LA + LB*c)/(2*LB)*(2*k - 1)/(N-1)
 				end
@@ -246,238 +246,300 @@ end
 					return (k-1)/(N-1)
 				end
 				rho_0 = urho(0)
+				function Lw_profit(theta) #theta should contain rho_1, ..., rho_n-1 ; lambda_2, ... , lambda_n-1
+					lambda_vec = [lambda_lb; 0.0; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]]
+					profit = 0.0
+					for i = 1:N-1
+						k = i+1 # dealing with indexing
+						f(l) =  l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						inc = ((rho_vec[k] - c)*M*Lshare(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*Lshare(ps1)*M - (ps2 - rho_vec[k-1])*Lshare(ps2)*M)
+						profit = profit + inc
+					end
+					return -profit
+				end
+				function Lwfocs!(theta, wfocs_vec)
+					lambda_vec = [lambda_lb; 0.0 ; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
+					# Calculating FOCs
+					for i in 1:N-1 
+						k = i+1 # dealing with the increment in indexing and making code look more like notation
+						#calculating integral for rho FOC
+						f(l) = l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						#rho FOC
+							term1 = ((rho_vec[k] - c)*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1))*int
+							term2 = ((ps1 - rho_vec[k])*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+							term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+							res = term1 + term2*term3
+							wfocs_vec[i] = -res
+						# lambda FOC
+						if i == 1
+							# do nothing
+						else
+							term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((rho_vec[k-1] - c)*M*Lshare(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term3 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
+							term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+							res = term1 + term2 + term3*term4
+							wfocs_vec[i+N-1-1] = -res
+						end
+						
+					end
+				end
+				function Lwhess!(theta, whess_mat)
+					lambda_vec = [lambda_lb; 0.0; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
+					
+					#rho rho part of hess
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						f(l) = l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						for j = 1:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + 2*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
+								term2 = M*((ps1 - rho_vec[k])*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k])*(Ld_pstar_d_rho(rho_vec[k]) - 1) + Lshare(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + (Ld_pstar_d_rho(rho_vec[k]) - 1)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
+								term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+								res = term1*int + term2*term3
+								whess_mat[i,j] = -res
+							else
+								whess_mat[i,j] = 0.0
+							end
+						end
+					end
+					# rho lambda part of hess (upper right)
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						for j = 2:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+								term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+								term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
+								res = term1 + term2*term3
+								whess_mat[i,j+N-1-1] = -res
+							elseif j == i+1
+								term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+								term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+								term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
+								res = term1 + term2*(-1)*term3
+								whess_mat[i,j+N-1-1] = -res
+									
+							else
+								whess_mat[i,j+N-1-1] = 0.0
+							end
+						end
+					end
+					#lambda lambda part of hess
+					for i = 2:N-1
+						k = i+1 #dealing with 1 indexing
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						for j = 2:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*Lshare(ps1))
+								term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
+								term3 = M*((rho_vec[k-1] - c)*Lshare(ps2))
+								term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
+								term5 = M*((ps1 - rho_vec[k])*Lshare(ps1) - (ps2 - rho_vec[k-1])*Lshare(ps2))
+								term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
+								res = term1*term2 + term3*term4 + term5*term6
+								whess_mat[i+N-1-1,j+N-1-1] = -res
+							else
+								whess_mat[i+N-1-1,j+N-1-1] = 0.0
+							end
+						end
+					end
+					# lambda rho part (lower left). should be same as rho_lambda part.
+					for i = 2:N-1
+						for j = 1:N-1
+							whess_mat[i+N-1-1,j] = whess_mat[j,i+N-1-1]
+						end
+					end
+				end
+			else
+				function urho(k::Integer)
+					return -LA/LB + (1/2*N-1)*(2/LB)*(LA + LB*c)*k
+				end
+				function ulambda(k::Integer)
+					return (2*k - 1)/(2*N-1)
+				end
+				rho_0 = urho(0)
+				function Lw_profit(theta) # params should contain rho_1 ... rho_N-1, lambda_1, ..., lambda n-1
+					lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]]
+					profit = 0.0
+					for i = 1:N-1
+						k = i+1 # dealing with indexing
+						f(l) =  l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						inc = ((rho_vec[k] - c)*M*Lshare(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*Lshare(ps1)*M - (ps2 - rho_vec[k-1])*Lshare(ps2)*M)
+						profit = profit + inc
+					end
+					return -profit
+				end
+				function Lwfocs!(theta, wfocs_vec)
+					lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
+					# Calculating FOCs
+					for i in 1:N-1 
+						k = i+1 # dealing with the increment in indexing and making code look more like notation
+						#calculating integral for rho FOC
+						f(l) = l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						#rho FOC
+							term1 = ((rho_vec[k] - c)*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1))*int
+							term2 = ((ps1 - rho_vec[k])*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+							term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+							res = term1 + term2*term3
+							wfocs_vec[i] = -res
+						# lambda FOC
+						if i == 1
+							term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
+							term3 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+							res = term1 + term2*term3
+							wfocs_vec[i+N-1] = -res
+						else
+							term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((rho_vec[k-1] - c)*M*Lshare(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term3 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
+							term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+							res = term1 + term2 + term3*term4
+							wfocs_vec[i+N-1] = -res
+						end
+						
+					end
+				end
+				function Lwhess!(theta,whess_mat)
+					lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
+					
+					#rho rho part of hess
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						f(l) = l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						for j = 1:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + 2*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
+								term2 = M*((ps1 - rho_vec[k])*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k])*(Ld_pstar_d_rho(rho_vec[k]) - 1) + Lshare(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + (Ld_pstar_d_rho(rho_vec[k]) - 1)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
+								term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+								res = term1*int + term2*term3
+								whess_mat[i,j] = -res
+							else
+								whess_mat[i,j] = 0.0
+							end
+						end
+					end
+					# rho lambda part of hess (upper right)
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						for j = 1:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+								term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+								term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
+								res = term1 + term2*term3
+								whess_mat[i,j+N-1] = -res
+							elseif j == i+1
+								term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+								term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+								term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
+								res = term1 + term2*(-1)*term3
+								whess_mat[i,j+N-1] = -res
+									
+							else
+								whess_mat[i,j+N-1] = 0.0
+							end
+						end
+					end
+					#lambda lambda part of hess
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = Lp_star(rho_vec[k])
+						ps2 = Lp_star(rho_vec[k-1])
+						for j = 1:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*Lshare(ps1))
+								term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
+								term3 = M*((rho_vec[k-1] - c)*Lshare(ps2))
+								term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
+								term5 = M*((ps1 - rho_vec[k])*Lshare(ps1) - (ps2 - rho_vec[k-1])*Lshare(ps2))
+								term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
+								res = term1*term2 + term3*term4 + term5*term6
+								whess_mat[i+N-1,j+N-1] = -res
+							else
+								whess_mat[i+N-1,j+N-1] = 0.0
+							end
+						end
+					end
+					# lambda rho part (lower left). should be same as rho_lambda part.
+					for i = 1:N-1
+						for j = 1:N-1
+							whess_mat[i+N-1,j] = whess_mat[j,i+N-1]
+						end
+					end
+				end
 			end
 			##### Optimizer Approach
-			function Lw_profit(params...)
-				theta = collect(params)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]]
-				profit = 0.0
-				for i = 1:N-1
-					k = i+1 # dealing with indexing
-					f(l) =  l*est_pdf(l)
-					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = Lp_star(rho_vec[k])
-					ps2 = Lp_star(rho_vec[k-1])
-					inc = ((rho_vec[k] - c)*M*Lshare(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*Lshare(ps1)*M - (ps2 - rho_vec[k-1])*Lshare(ps2)*M)
-					profit = profit + inc
-				end
-				return -profit
-			end
-			function Lwfocs!(wfocs_vec,params...)
-				theta = collect(params)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
-				# Calculating FOCs
-				for i in 1:N-1 
-					k = i+1 # dealing with the increment in indexing and making code look more like notation
-					#calculating integral for rho FOC
-					f(l) = l*est_pdf(l)
-					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = Lp_star(rho_vec[k])
-					ps2 = Lp_star(rho_vec[k-1])
-					#rho FOC
-						term1 = ((rho_vec[k] - c)*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1))*int
-						term2 = ((ps1 - rho_vec[k])*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
-						term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
-						res = term1 + term2*term3
-						wfocs_vec[i] = -res
-					# lambda FOC
-					if i == 1
-						term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-						term2 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
-						term3 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
-						res = term1 + term2*term3
-						wfocs_vec[i+N-1] = -res
-					else
-						term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-						term2 = ((rho_vec[k-1] - c)*M*Lshare(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
-						term3 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
-						term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
-						res = term1 + term2 + term3*term4
-						wfocs_vec[i+N-1] = -res
-					end
-					
-				end
-			end
-			function Lwhess!(whess_mat,params)
-				theta = collect(params)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
-				
-				#rho rho part of hess
-				for i = 1:N-1
-					k = i+1 #dealing with 1 indexing
-					f(l) = l*est_pdf(l)
-					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = Lp_star(rho_vec[k])
-					ps2 = Lp_star(rho_vec[k-1])
-					for j = 1:N-1
-						if j == i
-							term1 = M*((rho_vec[k] - c)*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + 2*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
-							term2 = M*((ps1 - rho_vec[k])*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k])*(Ld_pstar_d_rho(rho_vec[k]) - 1) + Lshare(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + (Ld_pstar_d_rho(rho_vec[k]) - 1)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
-							term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
-							res = term1*int + term2*term3
-							whess_mat[i,j] = -res
-						else
-							whess_mat[i,j] = 0.0
-						end
-					end
-				end
-				# rho lambda part of hess (upper right)
-				for i = 1:N-1
-					k = i+1 #dealing with 1 indexing
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = Lp_star(rho_vec[k])
-					ps2 = Lp_star(rho_vec[k-1])
-					for j = 1:N-1
-						if j == i
-							term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
-							term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
-							res = term1 + term2*term3
-							whess_mat[i,j+N-1] = -res
-						elseif j == i+1
-							term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
-							term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
-							term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
-							res = term1 + term2*(-1)*term3
-							whess_mat[i,j+N-1] = -res
-								
-						else
-							whess_mat[i,j+N-1] = 0.0
-						end
-					end
-				end
-				#lambda lambda part of hess
-				for i = 1:N-1
-					k = i+1 #dealing with 1 indexing
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = Lp_star(rho_vec[k])
-					ps2 = Lp_star(rho_vec[k-1])
-					for j = 1:N-1
-						if j == i
-							term1 = M*((rho_vec[k] - c)*Lshare(ps1))
-							term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
-							term3 = M*((rho_vec[k-1] - c)*Lshare(ps2))
-							term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
-							term5 = M*((ps1 - rho_vec[k])*Lshare(ps1) - (ps2 - rho_vec[k-1])*Lshare(ps2))
-							term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
-							res = term1*term2 + term3*term4 + term5*term6
-							whess_mat[i+N-1,j+N-1] = -res
-						else
-							whess_mat[i+N-1,j+N-1] = 0.0
-						end
-					end
-				end
-				# lambda rho part (lower left). should be same as rho_lambda part.
-				for i = 1:N-1
-					for j = 1:N-1
-						whess_mat[i+N-1,j] = whess_mat[j,i+N-1]
-					end
-				end
-				
-
-			end
 			rho_start = convert(Array{Float64,1},[urho(k) for k = 1:N-1])
-			lambda_start = convert(Array{Float64,1},[ulambda(k) for k = 1:N-1])	
-			innerx0 = [rho_start ; lambda_start] + 1*randn(2*(N-1))
+			lambda_start = convert(Array{Float64,1},[ulambda(k) for k = 2:N-1])	
+			innerx0 = [rho_start ; lambda_start]
 			# checking hessian and gradient
-				
-			innerx0 = [20.0, 10.0, 5.0, 0.3, 0.6, 0.9]
+			#=	
+			innerx0 = [20.0, 10.0, 5.0, 3.0, 0.3, 0.6, 0.9]
 			println(innerx0)
-			gtest1 = ones(2*(N-1))
-			gtest2 = ones(2*(N-1))
-			htest = ones(2*(N-1),2*(N-1))
-			eps = zeros(2*(N-1)) 
+			gtest1 = ones(length(innerx0))
+			gtest2 = ones(length(innerx0))
+			htest = ones(length(innerx0),length(innerx0))
+			eps = zeros(length(innerx0)) 
 			step = 1e-9
-			eps[4]= step
+			eps[7] = step
 			upx = innerx0 + eps
 			downx = innerx0 - eps
-			est_grad = (Lw_profit(upx...) - Lw_profit(downx...))/(2*step)
+			est_grad = (Lw_profit(upx) - Lw_profit(downx))/(2*step)
 			println("Numerical grad: ", est_grad)
-			Lwfocs!(gtest1,innerx0...)
+			Lwfocs!(innerx0,gtest1)
 			println(gtest1)
 			
-			Lwfocs!(gtest1,upx...)
-			Lwfocs!(gtest2,downx...)
-			Lwhess!(htest,innerx0)
+			Lwfocs!(upx,gtest1)
+			Lwfocs!(downx,gtest2)
+			Lwhess!(innerx0,htest)
 			println("Numerical Hessian: ", (gtest1 - gtest2)/(2*step))
 			println(htest)
-			
-			#=
-			# Solving problem numerically. Using JuMP modeling language
-			try
-				JuMP.register(:Lshare,1,Lshare,autodiff = true) # share function
-			catch e
-				if e.msg == "Operator Lshare has already been defined"
-					ind = pop!(ReverseDiffSparse.univariate_operator_to_id, :Lshare)
-					deleteat!(ReverseDiffSparse.univariate_operators,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_f,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_fprime,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_fprimeprime,ind)
-					JuMP.register(:Lshare,1,Lshare,autodiff = true) # share function
-				end
-			end
-
-			try
-				JuMP.register(:Lp_star,1,Lp_star,Ld_pstar_d_rho,Ld2_pstar_d2_rho) 
-			catch e
-				if e.msg == "Operator Lp_star has already been defined"
-					ind = pop!(ReverseDiffSparse.univariate_operator_to_id, :Lp_star)
-					deleteat!(ReverseDiffSparse.univariate_operators,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_f,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_fprime,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_fprimeprime,ind)
-					JuMP.register(:Lp_star,1,Lp_star,Ld_pstar_d_rho,Ld2_pstar_d2_rho) 
-				end
-			end
-
-			try
-				JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
-			catch e
-				if e.msg == "Operator Lw_profit has already been defined"
-					ind = pop!(ReverseDiffSparse.operator_to_id, :Lw_profit)
-					pop!(ReverseDiffSparse.user_operator_map,ind)
-					JuMP.register(:Lw_profit,2*(N-1),Lw_profit,Lwfocs!, autodiff = false)
-				end
-			end
-			global Linner_m = nothing # resetting for succsessive runs
-			#global Linner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, xtol_abs = tol, xtol_rel = tol)) #bad form, but needed for meta programming BSa
-			global Linner_m = Model(solver=IpoptSolver(tol=inner_tol,print_level=0)) #bad form, but needed for meta programming BSa
-			@variable(Linner_m,Linner_s[1:2*(N-1)])
-			global Linner_s = Linner_s #bad form, but needed for meta programming BS
-			for k = 1:N-1 
-				setvalue(Linner_s[k],urho(k)) # setting rho starting values
-				setvalue(Linner_s[N-1+k],ulambda(k)) # setting lambda starting values
-			end
-			for k = 1:N-1 # setting bounds on lambda
-				setlowerbound(Linner_s[k],0.0)
-				setupperbound(Linner_s[k],rho_0)
-				setlowerbound(Linner_s[N-1+k],0.0)
-				setupperbound(Linner_s[N-1+k],1.0)
-			end
-			if constrained == 1
-				@NLconstraint(Linner_m,cons1,Linner_s[N]*Lshare(Lp_star(Linner_s[1])) == 0)
-				#setupperbound(Linner_s[N],0.0)
-			end
-			# defining objective function. Need to use meta-programming BS to get around syntax limitations
-			obj_str = "@NLobjective(Linner_m, Min, Lw_profit("
-			for i = 1:2*(N-1)
-				obj_str = obj_str * "Linner_s[$i],"
-			end
-			obj_str = obj_str[1:end-1] # removing last comma
-			obj_str = obj_str * "))" # closing parens
-			eval(parse(obj_str))
-			solve(Linner_m)
-			sol_sched = getvalue(Linner_s)
-			
+			=#
+			res = Optim.optimize(Lw_profit,Lwfocs!,Lwhess!,innerx0,method=NewtonTrustRegion())
+			sol_sched=Optim.minimizer(res)
 			est_rhos = [rho_0 ; sol_sched[1:N-1]]
-			est_lambdas = [lambda_lb ; sol_sched[N:end] ; lambda_ub]
-
+			est_lambdas = [lambda_lb ; 0.0; sol_sched[N:end] ; lambda_ub]
 			
 			# Calculating fixed fees
 			est_ff = [0.0]
@@ -487,7 +549,6 @@ end
 				push!(est_ff,A)
 			end
 			return (est_rhos,est_ff,est_lambdas)
-			=#
 		end		
 		
 		function price_sched_calc(params,N)
@@ -515,242 +576,307 @@ end
 			rho_0 = 2.0*max_rho
 		
 			##### Optimizer Approach
-			function w_profit(params...)
-				theta = collect(params)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]]
-				profit = 0.0
-				for i = 1:N-1
-					k = i+1 # dealing with indexing
-					f(l) =  l*est_pdf(l)
-					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = p_star(rho_vec[k])
-					ps2 = p_star(rho_vec[k-1])
-					inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
-					profit = profit + inc
-				end
-				return -profit
-			end
-			function wfocs!(wfocs_vec,params...)
-				theta = collect(params)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
-				# Calculating FOCs
-				for i in 1:N-1 
-					k = i+1 # dealing with the increment in indexing and making code look more like notation
-					#calculating integral for rho FOC
-					f(l) = l*est_pdf(l)
-					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = p_star(rho_vec[k])
-					ps2 = p_star(rho_vec[k-1])
-					#rho FOC
-						term1 = ((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*int*M
-						term2 = ((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))*M
-						term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
-						res = term1 + term2*term3
-						wfocs_vec[i] = -res
-					# lambda FOC
-					if i == 1
-						term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-						term2 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
-						term3 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
-						res = term1 + term2*term3
-						wfocs_vec[i+N-1] = -res
-					else
-						term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-						term2 = ((rho_vec[k-1] - c)*M*share(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
-						term3 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
-						term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
-						res = term1 + term2 + term3*term4
-						wfocs_vec[i+N-1] = -res
+			if (constrained == 1)
+				function w_profit(theta) #theta should contain rho_1, ..., rho_n-1 ; lambda_2, ... , lambda_n-1
+					lambda_vec = [lambda_lb; 0.0 ; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]]
+					profit = 0.0
+					for i = 1:N-1
+						k = i+1 # dealing with indexing
+						f(l) =  l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
+						profit = profit + inc
 					end
-					
+					return -profit
 				end
-			end
-			function whess!(whess_mat,params)
-				theta = collect(params)
-				lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
-				rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
-				
-				#rho rho part of hess
-				for i = 1:N-1
-					k = i+1 #dealing with 1 indexing
-					f(l) = l*est_pdf(l)
-					int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = p_star(rho_vec[k])
-					ps2 = p_star(rho_vec[k-1])
-					for j = 1:N-1
-						if j == i
-							term1 = M*((rho_vec[k] - c)*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + 2*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
-							term2 = M*((ps1 - rho_vec[k])*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + d_share(ps1)*d_pstar_d_rho(rho_vec[k])*(d_pstar_d_rho(rho_vec[k]) - 1) + share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + (d_pstar_d_rho(rho_vec[k]) - 1)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
-							term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
-							res = term1*int + term2*term3
-							whess_mat[i,j] = -res
-						else
-							whess_mat[i,j] = 0.0
-						end
-					end
-				end
-				# rho lambda part of hess (upper right)
-				for i = 1:N-1
-					k = i+1 #dealing with 1 indexing
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = p_star(rho_vec[k])
-					ps2 = p_star(rho_vec[k-1])
-					for j = 1:N-1
-						if j == i
-							term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
-							term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
+				function wfocs!(theta, wfocs_vec)
+					lambda_vec = [lambda_lb; 0.0; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
+					# Calculating FOCs
+					for i in 1:N-1 
+						k = i+1 # dealing with the increment in indexing and making code look more like notation
+						#calculating integral for rho FOC
+						f(l) = l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						#rho FOC
+							term1 = ((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*int*M
+							term2 = ((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))*M
+							term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 							res = term1 + term2*term3
-							whess_mat[i,j+N-1] = -res
-						elseif j == i+1
-							term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
-							term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
-							term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
-							res = term1 + term2*(-1)*term3
-							whess_mat[i,j+N-1] = -res
-								
+							wfocs_vec[i] = -res
+						# lambda FOC
+						if i == 1
+							# do nothing
 						else
-							whess_mat[i,j+N-1] = 0.0
+							term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((rho_vec[k-1] - c)*M*share(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term3 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
+							term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+							res = term1 + term2 + term3*term4
+							wfocs_vec[i+N-1-1] = -res
 						end
+						
 					end
 				end
-				#lambda lambda part of hess
-				for i = 1:N-1
-					k = i+1 #dealing with 1 indexing
-					# Pre-calculating some stuff to avoid repeated calls to p_star
-					ps1 = p_star(rho_vec[k])
-					ps2 = p_star(rho_vec[k-1])
-					for j = 1:N-1
-						if j == i
-							term1 = M*((rho_vec[k] - c)*share(ps1))
-							term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
-							term3 = M*((rho_vec[k-1] - c)*share(ps2))
-							term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
-							term5 = M*((ps1 - rho_vec[k])*share(ps1) - (ps2 - rho_vec[k-1])*share(ps2))
-							term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
-							res = term1*term2 + term3*term4 + term5*term6
-							whess_mat[i+N-1,j+N-1] = -res
-						else
-							whess_mat[i+N-1,j+N-1] = 0.0
-						end
-					end
-				end
-				# lambda rho part (lower left). should be same as rho_lambda part.
-				for i = 1:N-1
-					for j = 1:N-1
-						whess_mat[i+N-1,j] = whess_mat[j,i+N-1]
-					end
-				end
-				
-
-			end
-			innerx0 = [20.0, 10.0, 5.0, 0.3, 0.6, 0.9]
-			# checking hessian and gradient
+				function whess!(theta, whess_mat)
+					lambda_vec = [lambda_lb; 0.0 ; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
 					
+					#rho rho part of hess
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						f(l) = l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						for j = 1:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + 2*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
+								term2 = M*((ps1 - rho_vec[k])*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + d_share(ps1)*d_pstar_d_rho(rho_vec[k])*(d_pstar_d_rho(rho_vec[k]) - 1) + share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + (d_pstar_d_rho(rho_vec[k]) - 1)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
+								term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+								res = term1*int + term2*term3
+								whess_mat[i,j] = -res
+							else
+								whess_mat[i,j] = 0.0
+							end
+						end
+					end
+					# rho lambda part of hess (upper right)
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						for j = 2:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+								term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+								term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
+								res = term1 + term2*term3
+								whess_mat[i,j+N-1-1] = -res
+							elseif j == i+1
+								term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+								term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+								term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
+								res = term1 + term2*(-1)*term3
+								whess_mat[i,j+N-1-1] = -res
+									
+							else
+								whess_mat[i,j+N-1-1] = 0.0
+							end
+						end
+					end
+					#lambda lambda part of hess
+					for i = 2:N-1
+						k = i+1 #dealing with 1 indexing
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						for j = 2:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*share(ps1))
+								term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
+								term3 = M*((rho_vec[k-1] - c)*share(ps2))
+								term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
+								term5 = M*((ps1 - rho_vec[k])*share(ps1) - (ps2 - rho_vec[k-1])*share(ps2))
+								term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
+								res = term1*term2 + term3*term4 + term5*term6
+								whess_mat[i+N-1-1,j+N-1-1] = -res
+							else
+								whess_mat[i+N-1-1,j+N-1-1] = 0.0
+							end
+						end
+					end
+					# lambda rho part (lower left). should be same as rho_lambda part.
+					for i = 2:N-1
+						for j = 1:N-1
+							whess_mat[i+N-1-1,j] = whess_mat[j,i+N-1-1]
+						end
+					end
+				end
+			else
+				function w_profit(theta) #theta should contain rho_1, ..., rho_n-1 ; lambda_1, lambda_2, ... , lambda_n-1
+					lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]]
+					profit = 0.0
+					for i = 1:N-1
+						k = i+1 # dealing with indexing
+						f(l) =  l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
+						profit = profit + inc
+					end
+					return -profit
+				end
+				function wfocs!(theta, wfocs_vec)
+					lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
+					# Calculating FOCs
+					for i in 1:N-1 
+						k = i+1 # dealing with the increment in indexing and making code look more like notation
+						#calculating integral for rho FOC
+						f(l) = l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						#rho FOC
+							term1 = ((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*int*M
+							term2 = ((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))*M
+							term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+							res = term1 + term2*term3
+							wfocs_vec[i] = -res
+						# lambda FOC
+						if i == 1
+							term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
+							term3 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+							res = term1 + term2*term3
+							wfocs_vec[i+N-1] = -res
+						else
+							term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((rho_vec[k-1] - c)*M*share(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term3 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
+							term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
+							res = term1 + term2 + term3*term4
+							wfocs_vec[i+N-1] = -res
+						end
+						
+					end
+				end
+				function whess!(theta, whess_mat)
+					lambda_vec = [lambda_lb; theta[N:end]; lambda_ub] 
+					rho_vec = [rho_0 ; theta[1:N-1]] # that inital value is just to force share(p_star(rho_0,lambda_0)) = 0. Ideally should be Inf
+					
+					#rho rho part of hess
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						f(l) = l*est_pdf(l)
+						int = sparse_int(f,lambda_vec[k],lambda_vec[k+1])
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						for j = 1:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + 2*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
+								term2 = M*((ps1 - rho_vec[k])*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + d_share(ps1)*d_pstar_d_rho(rho_vec[k])*(d_pstar_d_rho(rho_vec[k]) - 1) + share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + (d_pstar_d_rho(rho_vec[k]) - 1)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
+								term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
+								res = term1*int + term2*term3
+								whess_mat[i,j] = -res
+							else
+								whess_mat[i,j] = 0.0
+							end
+						end
+					end
+					# rho lambda part of hess (upper right)
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						for j = 1:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+								term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+								term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
+								res = term1 + term2*term3
+								whess_mat[i,j+N-1] = -res
+							elseif j == i+1
+								term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+								term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+								term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
+								res = term1 + term2*(-1)*term3
+								whess_mat[i,j+N-1] = -res
+									
+							else
+								whess_mat[i,j+N-1] = 0.0
+							end
+						end
+					end
+					#lambda lambda part of hess
+					for i = 1:N-1
+						k = i+1 #dealing with 1 indexing
+						# Pre-calculating some stuff to avoid repeated calls to p_star
+						ps1 = p_star(rho_vec[k])
+						ps2 = p_star(rho_vec[k-1])
+						for j = 1:N-1
+							if j == i
+								term1 = M*((rho_vec[k] - c)*share(ps1))
+								term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
+								term3 = M*((rho_vec[k-1] - c)*share(ps2))
+								term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
+								term5 = M*((ps1 - rho_vec[k])*share(ps1) - (ps2 - rho_vec[k-1])*share(ps2))
+								term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
+								res = term1*term2 + term3*term4 + term5*term6
+								whess_mat[i+N-1,j+N-1] = -res
+							else
+								whess_mat[i+N-1,j+N-1] = 0.0
+							end
+						end
+					end
+					# lambda rho part (lower left). should be same as rho_lambda part.
+					for i = 1:N-1
+						for j = 1:N-1
+							whess_mat[i+N-1,j] = whess_mat[j,i+N-1]
+						end
+					end
+				end
+			end
+			
+			# checking hessian and gradient
+			#=		
+			innerx0 = [20.0, 10.0, 5.0, 3.0, 0.3, 0.6, 0.9]
 			println(innerx0)
-			gtest1 = ones(2*(N-1))
-			gtest2 = ones(2*(N-1))
-			htest = ones(2*(N-1),2*(N-1))
-			eps = zeros(2*(N-1)) 
+			gtest1 = ones(length(innerx0))
+			gtest2 = ones(length(innerx0))
+			htest = ones(length(innerx0),length(innerx0))
+			eps = zeros(length(innerx0)) 
 			step = 1e-9
-			eps[4] = step
+			eps[2] = step
 			upx = innerx0 + eps
 			downx = innerx0 - eps
-			est_grad = (w_profit(upx...) - w_profit(downx...))/(2*step)
+			est_grad = (w_profit(upx) - w_profit(downx))/(2*step)
 			println("Numerical grad: ", est_grad)
-			wfocs!(gtest1,innerx0...)
+			wfocs!(innerx0,gtest1)
 			println(gtest1)
 			
-			wfocs!(gtest1,upx...)
-			wfocs!(gtest2,downx...)
-			whess!(htest,innerx0)
+			wfocs!(upx,gtest1)
+			wfocs!(downx,gtest2)
+			whess!(innerx0,htest)
 			println("Numerical Hessian: ", (gtest1 - gtest2)/(2*step))
 			println(htest)
-					
-			#=
-			# Solving problem numerically. Using JuMP modeling language
-			try
-				JuMP.register(:share,1,share,autodiff = true) # share function
-			catch e
-				if e.msg == "Operator share has already been defined"
-					ind = pop!(ReverseDiffSparse.univariate_operator_to_id, :share)
-					deleteat!(ReverseDiffSparse.univariate_operators,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_f,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_fprime,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_fprimeprime,ind)
-					JuMP.register(:share,1,share,autodiff = true) # share function
-				end
-			end
+			=#		
 
-			try
-				JuMP.register(:p_star,1,p_star,d_pstar_d_rho,d2_pstar_d2_rho) 
-			catch e
-				if e.msg == "Operator p_star has already been defined"
-					ind = pop!(ReverseDiffSparse.univariate_operator_to_id, :p_star)
-					deleteat!(ReverseDiffSparse.univariate_operators,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_f,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_fprime,ind)
-					pop!(ReverseDiffSparse.user_univariate_operator_fprimeprime,ind)
-					JuMP.register(:p_star,1,p_star,d_pstar_d_rho,d2_pstar_d2_rho) 
-				end
+			# using liner approx as hot start
+			hs_sched = Lprice_sched_calc([0.0,params[2]],N)
+			hs_rhos = hs_sched[1]
+			hs_ff = hs_sched[2]
+			hs_lambdas = hs_sched[3]
+			c = 0.0
+			innerx0 = [hs_rhos[2:end] ; hs_lambdas[3:end-1]]
+			res = Optim.optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), extended_trace=false)
+			innerx0=Optim.minimizer(res)
+			steps = (params[1] - 1.0 + 1.0)/0.1 # divide by desired step size, here just 1. Could be made smaller for smoother continuation
+			for cont_c = linspace(1.0,params[1],steps) # continuation method since linear approx is no good with big c
+				#println([c,innerx0])
+				c = cont_c
+				res = Optim.optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), extended_trace=false)
+				innerx0=Optim.minimizer(res)
 			end
-
-			try
-				JuMP.register(:w_profit,2*(N-1),w_profit,wfocs!, autodiff = false)
-			catch e
-				if e.msg == "Operator w_profit has already been defined"
-					ind = pop!(ReverseDiffSparse.operator_to_id, :w_profit)
-					pop!(ReverseDiffSparse.user_operator_map,ind)
-					JuMP.register(:w_profit,2*(N-1),w_profit,wfocs!, autodiff = false)
-				end
-			end
-
-			global inner_m = nothing # resetting for succsessive runs
-			#global inner_m = Model(solver=NLoptSolver(algorithm=:LD_SLSQP, ftol_abs=tol, ftol_rel=tol, xtol_abs = tol, xtol_rel=tol)) #bad form, but needed for meta programming BS
-			global inner_m = Model(solver=IpoptSolver(tol=inner_tol, print_level=0 )) #bad form, but needed for meta programming BS
-			@variable(inner_m,inner_s[1:2*(N-1)])
-			global inner_s = inner_s #bad form, but needed for meta programming BS
-			
-			# setting starting values. The solution process is as follows:
-			#	1) Solve linear-uniform model as  hot start for non-linear uniform model
-			#	2) Solve non-linear uniform model as hot start for non-uniform non-linear model
-			# This helps better condition the solution process, which appears divergent in some cases for unkown reasons
-	
-			(Lrho,Lff,Llambda) = Lprice_sched_calc([c;0.0],N) # linear hot start
-			for k = 1:N-1 
-				setvalue(inner_s[k],Lrho[k+1]) # setting rho starting values
-				setvalue(inner_s[N-1+k],Llambda[k+1]) # setting lambda starting values
-			end
-			for k = 1:N-1 # setting bounds
-				#setlowerbound(inner_s[k],0.0)
-				#setupperbound(inner_s[k],rho_0)
-				setlowerbound(inner_s[N-1+k],0.0)
-				setupperbound(inner_s[N-1+k],1.0)
-			end
-			if constrained == 1
-				@NLconstraint(inner_m,cons1,inner_s[N]*share(p_star(inner_s[1])) == 0)
-			end
-		
-			# defining objective function. Need to use meta-programming BS to get around syntax limitations
-			obj_str = "@NLobjective(inner_m, Min, w_profit("
-			for i = 1:2*(N-1)
-				obj_str = obj_str * "inner_s[$i],"
-			end
-			obj_str = obj_str[1:end-1] # removing last comma
-			obj_str = obj_str * "))" # closing parens
-			eval(parse(obj_str))
-			b=1.0 # Uniform non-linear hot start
-			solve(inner_m) # Uniform non-linear hot start
-			b=exp(params[2]) # Acutal solution
-			solve(inner_m) # Actual solution
-			sol_sched = getvalue(inner_s)
+			sol_sched = innerx0	
 			est_rhos = [rho_0 ; sol_sched[1:N-1]]
-			est_lambdas = [lambda_lb ; sol_sched[N:end] ; lambda_ub]
+			est_lambdas = [lambda_lb ; 0.0 ; sol_sched[N:end] ; lambda_ub]
 
 			
 			# Calculating fixed fees
@@ -761,14 +887,12 @@ end
 				push!(est_ff,A)
 			end
 			return (est_rhos,est_ff,est_lambdas)
-			=#
+			
 		end
 		
 
 		obs_N = length(obs_rhos)+1
-		println(Lprice_sched_calc([5.0;log(1.0)],obs_N))
-		println(price_sched_calc([5.0;log(1.0)],obs_N))
-		#=
+		
 		# testing recovery of params with fake data
 		#=	
 		println("Testing recovery of parameters with 'fake' data")
@@ -848,7 +972,7 @@ end
 			grad[1] = (moment_obj_func(params[1] + eps,params[2]) - moment_obj_func(params[1] - eps,params[2]))/(2*eps)
 			grad[2] = (moment_obj_func(params[1],params[2]+eps) - moment_obj_func(params[1],params[2]-eps))/(2*eps)
 		end
-		#=
+		
 		# grid search approach	
 		c_grid = 1:.5:100
 		b_grid = linspace(-5.0,5.0,20)
@@ -874,7 +998,7 @@ end
 		b_ub = maximum(feas_b)
 		b_lb = minimum(feas_b)
 		println([c_lb,c_ub,b_lb,b_ub])
-		=#	
+			
 		#=
 		#constrained min approach as in PPHI
 		JuMP.register(:moment_obj_func, 2, moment_obj_func, ∇moment_obj_func,autodiff = false)
@@ -908,18 +1032,19 @@ end
 		println([lb_b,ub_b,lb_c,ub_c])	
 		toc()	
 		=#
-		println(Lprice_sched_calc([5.0,log(3.0)],obs_N))
-		println(Lprice_sched_calc([5.0,0.0],obs_N))
-		println(Lprice_sched_calc([5.0,2.894736842105263],obs_N))
-		
-		#=	
+
 		# finding xi param (cost of additional segment)
+		
 		mid_c = (c_lb + c_ub)/2.0
 		mid_b = (b_lb + b_ub)/2.0
 		println([mid_c,mid_b])
 		eq_ps = price_sched_calc([mid_c,mid_b], obs_N)
 		more_ps = price_sched_calc([mid_c,mid_b], obs_N+1)
 		less_ps = price_sched_calc([mid_c,mid_b],obs_N-1)
+		println(eq_ps)
+		println(more_ps)
+		println(less_ps)
+		
 		less_rho = less_ps[1]
 		less_ff = less_ps[2]
 		less_lambda = less_ps[3]
@@ -986,8 +1111,7 @@ end
 
 		Δw_profit = ((lin_profit-2*mid_xi) - (eq_profit - obs_N*mid_xi))/(eq_profit - obs_N*mid_xi)
 		println(Δw_profit)
-		=#	
-		=#	
+		
 		return 1
 	else
 		println("Product has no matching price data.")

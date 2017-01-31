@@ -553,7 +553,7 @@ end
 		
 		function price_sched_calc(params,N)
 			constrained = 1 # solving problem with A1 constrained to 0
-
+			#M = 1000 # normalizing as it shouldn't matter for schedule calculation. Helps numerical methods
 			# params are the params of the wholesaler's problem we're trying to
 			# estimate. 
 
@@ -867,7 +867,7 @@ end
 			innerx0 = [hs_rhos[2:end] ; hs_lambdas[3:end-1]]
 			res = Optim.optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), extended_trace=false)
 			innerx0=Optim.minimizer(res)
-			steps = (params[1] - 1.0 + 1.0)/0.1 # divide by desired step size, here just 1. Could be made smaller for smoother continuation
+			steps = (params[1] - 1.0 + 1.0)/0.1 # divide by desired step size. Could be made smaller for smoother continuation
 			for cont_c = linspace(1.0,params[1],steps) # continuation method since linear approx is no good with big c
 				#println([c,innerx0])
 				c = cont_c
@@ -906,7 +906,7 @@ end
 		println(obs_sched)
 		=#
 		# Generating Deviations. Same for all params, so only do once.
-		dev_step = .2
+		dev_step = .20
 		dev_steps = [1.0+dev_step, 1.0, 1.0-dev_step]
 		cart_prod_arg = fill(dev_steps,2*(obs_N-1))
 		dev_cart_prod = collect(Iterators.product(cart_prod_arg...)) # need to specify Iterators. here because I use product as another symbol
@@ -972,7 +972,7 @@ end
 			grad[1] = (moment_obj_func(params[1] + eps,params[2]) - moment_obj_func(params[1] - eps,params[2]))/(2*eps)
 			grad[2] = (moment_obj_func(params[1],params[2]+eps) - moment_obj_func(params[1],params[2]-eps))/(2*eps)
 		end
-		
+		#=	
 		# grid search approach	
 		c_grid = 1:.5:100
 		b_grid = linspace(-5.0,5.0,20)
@@ -990,7 +990,7 @@ end
 		close(csvfile)
 		#min_q_ind = findin(Q_eval[:,3],minimum(Q_eval[:,3]))
 		min_q = minimum(Q_eval[:,3])
-		min_q_ind = find(Q_eval[:,3] .<= 1e-6)
+		min_q_ind = find(Q_eval[:,3] .<= 1.10*min_q)
 		feas_c = Q_eval[min_q_ind,1]
 		feas_b = Q_eval[min_q_ind,2]
 		c_ub = maximum(feas_c)
@@ -998,51 +998,18 @@ end
 		b_ub = maximum(feas_b)
 		b_lb = minimum(feas_b)
 		println([c_lb,c_ub,b_lb,b_ub])
-			
-		#=
-		#constrained min approach as in PPHI
-		JuMP.register(:moment_obj_func, 2, moment_obj_func, ∇moment_obj_func,autodiff = false)
-		outer_tol = 1e-3
-		tic()
-		#m_moment = Model(solver=NLoptSolver(algorithm=:LD_MMA, ftol_abs=outer_tol, ftol_rel=outer_tol,maxeval = 6000, maxtime=60))
-		m_moment = Model(solver=IpoptSolver(tol=outer_tol,print_level=5))
-		@variable(m_moment, 0.0 <= moment_c <= 1000.0, start=1.0)
-		@variable(m_moment, 0.0 <= moment_b <= 10.0, start=0.0)
-		@NLconstraint(m_moment, moment_obj_func(moment_c,moment_b) <= 1e-16)
-		@NLobjective(m_moment,Max,moment_b)
-		solve(m_moment)
-		ub_b = getvalue(moment_b)
-		setvalue(moment_b,0.0)
-		setvalue(moment_c,1.0)
-		@NLobjective(m_moment,Max,moment_c)
-		solve(m_moment)
-		ub_c = getvalue(moment_c)
-		setvalue(moment_b,0.0)
-		setvalue(moment_c,1.0)
-		@NLobjective(m_moment,Min,moment_b)
-		solve(m_moment)
-		lb_b = getvalue(moment_b)
-		setvalue(moment_b,0.0)
-		setvalue(moment_c,1.0)
-		@NLobjective(m_moment,Min,moment_c)
-		solve(m_moment)
-		lb_c = getvalue(moment_c)
-		setvalue(moment_b,0.0)
-		setvalue(moment_c,1.0)
-		println([lb_b,ub_b,lb_c,ub_c])	
-		toc()	
-		=#
+		=#	
 
 		# finding xi param (cost of additional segment)
 		
-		mid_c = (c_lb + c_ub)/2.0
-		mid_b = (b_lb + b_ub)/2.0
+		mid_c = 20.0 # (c_lb + c_ub)/2.0
+		mid_b = 2.894736842 #(b_lb + b_ub)/2.0
 		println([mid_c,mid_b])
 		eq_ps = price_sched_calc([mid_c,mid_b], obs_N)
-		more_ps = price_sched_calc([mid_c,mid_b], obs_N+1)
-		less_ps = price_sched_calc([mid_c,mid_b],obs_N-1)
 		println(eq_ps)
+		more_ps = price_sched_calc([mid_c,mid_b], obs_N+1)
 		println(more_ps)
+		less_ps = price_sched_calc([mid_c,mid_b],obs_N-1)
 		println(less_ps)
 		
 		less_rho = less_ps[1]
@@ -1094,23 +1061,62 @@ end
 			end
 			return profit
 		end
-		eq_profit = out_w_profit(eq_sched)
-		less_profit = out_w_profit(less_sched)
-		more_profit = out_w_profit(more_sched)
-		xi_ub = eq_profit - less_profit
-		xi_lb = more_profit - eq_profit
+		eq_wprofit = out_w_profit(eq_sched)
+		less_wprofit = out_w_profit(less_sched)
+		more_wprofit = out_w_profit(more_sched)
+		xi_ub = eq_wprofit - less_wprofit
+		xi_lb = more_wprofit - eq_wprofit
 		println([xi_lb,xi_ub])
 		mid_xi = (xi_lb + xi_ub)/2
 		println(mid_xi)
+		
+		# Linear price counter factual
 		lin_ps = price_sched_calc([mid_c,mid_b],2)
+		println(lin_ps)
 		lin_rho = lin_ps[1]
 		lin_ff = lin_ps[2]
 		lin_lambda = lin_ps[3]
 		lin_sched = [lin_rho[2:end] ; lin_lambda[2:end-1]]
-		lin_profit = out_w_profit(lin_sched)
+		lin_wprofit = out_w_profit(lin_sched)
+	
+		function rprofit(rho,lambda,ff)
+			ps = p_star(rho)
+			return (ps - rho)*share(ps)*M*lambda - ff
+		end
+		eq_rprofit = 0.0
+		for i = 1:obs_N-1
+			k = i + 1
+			f(x) = rprofit(eq_rho[k],x,eq_ff[k])
+			res = sparse_int(f,eq_lambda[k],eq_lambda[k+1])
+			eq_rprofit += res
+		end
 
-		Δw_profit = ((lin_profit-2*mid_xi) - (eq_profit - obs_N*mid_xi))/(eq_profit - obs_N*mid_xi)
+		eq_csurp = 0.0
+		tot_q = 0.0
+		for i = 1:obs_N-1
+			k = i + 1
+			ps = p_star(eq_rho[k])
+			q = share(ps)
+			res = quadgk(share,ps,Inf)[1]
+			eq_csurp += res*q
+			tot_q += q
+		end
+		eq_csurp = eq_csurp / tot_q
+
+		lin_ps = p_star(lin_rho[2])
+		lin_csurp = quadgk(share,lin_ps,Inf)[1]
+
+
+		lrp(x) = rprofit(lin_rho[2],x,lin_ff[2])
+		lin_rprofit = sparse_int(lrp,lin_lambda[2],lin_lambda[3])
+		
+		
+		Δw_profit = ((lin_wprofit-2*mid_xi) - (eq_wprofit - obs_N*mid_xi))/(eq_wprofit - obs_N*mid_xi)
+		Δr_profit = (lin_rprofit - eq_rprofit)/(eq_rprofit)
+		Δc_surp = (lin_csurp - eq_csurp)/(eq_csurp)
 		println(Δw_profit)
+		println(Δr_profit)
+		println(Δc_surp)
 		
 		return 1
 	else

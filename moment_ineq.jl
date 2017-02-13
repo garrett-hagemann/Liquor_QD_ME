@@ -1,5 +1,4 @@
-@everywhere using DataArrays, DataFrames, ForwardDiff, NLsolve, Roots, Distributions, Optim, JuMP, Iterators, Ipopt, NLopt
-EnableNLPResolve()
+@everywhere using DataArrays, DataFrames, ForwardDiff, Distributions, Optim, Iterators 
 #= goofy conversion magic =#
 import Base.convert
 function convert(t::Type{Float64},x::Array{Float64,1})
@@ -109,8 +108,8 @@ end
 		end
 
 		#Grabbing market size. Needs to be the same as that used to estimate shares
-		#M = df[prod_bool,:M][1]
-		M = 3000
+		M = df[prod_bool,:M][1]
+		#M = 3000
 		tol = 1e-16*M # tolerance for price schedule optimization solution
 		inner_tol = 1e-2 # tolerance for price schedule optimization solution
 		prod_price = df[prod_bool, :price][1]
@@ -218,6 +217,7 @@ end
 
 		function Lprice_sched_calc(params::Array{Float64,1},N::Int)
 			constrained = 1 # solving problem with A1 constrained to 0
+			m = 3000
 
 			# params are the params of the wholesaler's problem we're trying to
 			# estimate. 
@@ -226,8 +226,8 @@ end
 			# where rho is n long and lambda is n-1 long for an n option schedule
 
 			c = params[1] # marginal cost for wholesaler
-			#max_mc = params[2] # max MC for retailer. Scales type parameter
-			#M = exp(params[5])
+			#max_mc = params[2] # max mC for retailer. Scales type parameter
+			#m = exp(params[5])
 			#distribution parameters
 			a = 1.0 # exp(params[2]) #
 			b = exp(params[2]) # 
@@ -257,7 +257,7 @@ end
 						# Pre-calculating some stuff to avoid repeated calls to p_star
 						ps1 = Lp_star(rho_vec[k])
 						ps2 = Lp_star(rho_vec[k-1])
-						inc = ((rho_vec[k] - c)*M*Lshare(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*Lshare(ps1)*M - (ps2 - rho_vec[k-1])*Lshare(ps2)*M)
+						inc = ((rho_vec[k] - c)*m*Lshare(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*Lshare(ps1)*m - (ps2 - rho_vec[k-1])*Lshare(ps2)*m)
 						profit = profit + inc
 					end
 					return -profit
@@ -275,8 +275,8 @@ end
 						ps1 = Lp_star(rho_vec[k])
 						ps2 = Lp_star(rho_vec[k-1])
 						#rho FOC
-							term1 = ((rho_vec[k] - c)*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1))*int
-							term2 = ((ps1 - rho_vec[k])*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+							term1 = ((rho_vec[k] - c)*m*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + m*Lshare(ps1))*int
+							term2 = ((ps1 - rho_vec[k])*m*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + m*Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
 							term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 							res = term1 + term2*term3
 							wfocs_vec[i] = -res
@@ -284,9 +284,9 @@ end
 						if i == 1
 							# do nothing
 						else
-							term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term2 = ((rho_vec[k-1] - c)*M*Lshare(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term3 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
+							term1 = ((rho_vec[k] - c)*m*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((rho_vec[k-1] - c)*m*Lshare(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term3 = ((ps1 - rho_vec[k])*m*Lshare(ps1) - (ps2 - rho_vec[k-1])*m*Lshare(ps2))
 							term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
 							res = term1 + term2 + term3*term4
 							wfocs_vec[i+N-1-1] = -res
@@ -308,8 +308,8 @@ end
 						ps2 = Lp_star(rho_vec[k-1])
 						for j = 1:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + 2*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
-								term2 = M*((ps1 - rho_vec[k])*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k])*(Ld_pstar_d_rho(rho_vec[k]) - 1) + Lshare(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + (Ld_pstar_d_rho(rho_vec[k]) - 1)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
+								term1 = m*((rho_vec[k] - c)*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + 2*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
+								term2 = m*((ps1 - rho_vec[k])*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k])*(Ld_pstar_d_rho(rho_vec[k]) - 1) + Lshare(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + (Ld_pstar_d_rho(rho_vec[k]) - 1)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
 								term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 								res = term1*int + term2*term3
 								whess_mat[i,j] = -res
@@ -326,14 +326,14 @@ end
 						ps2 = Lp_star(rho_vec[k-1])
 						for j = 2:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-								term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+								term1 = m*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+								term2 = m*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
 								term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
 								res = term1 + term2*term3
 								whess_mat[i,j+N-1-1] = -res
 							elseif j == i+1
-								term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
-								term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+								term1 = m*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+								term2 = m*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
 								term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
 								res = term1 + term2*(-1)*term3
 								whess_mat[i,j+N-1-1] = -res
@@ -351,11 +351,11 @@ end
 						ps2 = Lp_star(rho_vec[k-1])
 						for j = 2:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*Lshare(ps1))
+								term1 = m*((rho_vec[k] - c)*Lshare(ps1))
 								term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
-								term3 = M*((rho_vec[k-1] - c)*Lshare(ps2))
+								term3 = m*((rho_vec[k-1] - c)*Lshare(ps2))
 								term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
-								term5 = M*((ps1 - rho_vec[k])*Lshare(ps1) - (ps2 - rho_vec[k-1])*Lshare(ps2))
+								term5 = m*((ps1 - rho_vec[k])*Lshare(ps1) - (ps2 - rho_vec[k-1])*Lshare(ps2))
 								term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
 								res = term1*term2 + term3*term4 + term5*term6
 								whess_mat[i+N-1-1,j+N-1-1] = -res
@@ -390,7 +390,7 @@ end
 						# Pre-calculating some stuff to avoid repeated calls to p_star
 						ps1 = Lp_star(rho_vec[k])
 						ps2 = Lp_star(rho_vec[k-1])
-						inc = ((rho_vec[k] - c)*M*Lshare(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*Lshare(ps1)*M - (ps2 - rho_vec[k-1])*Lshare(ps2)*M)
+						inc = ((rho_vec[k] - c)*m*Lshare(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*Lshare(ps1)*m - (ps2 - rho_vec[k-1])*Lshare(ps2)*m)
 						profit = profit + inc
 					end
 					return -profit
@@ -408,22 +408,22 @@ end
 						ps1 = Lp_star(rho_vec[k])
 						ps2 = Lp_star(rho_vec[k-1])
 						#rho FOC
-							term1 = ((rho_vec[k] - c)*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1))*int
-							term2 = ((ps1 - rho_vec[k])*M*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + M*Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+							term1 = ((rho_vec[k] - c)*m*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + m*Lshare(ps1))*int
+							term2 = ((ps1 - rho_vec[k])*m*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + m*Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
 							term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 							res = term1 + term2*term3
 							wfocs_vec[i] = -res
 						# lambda FOC
 						if i == 1
-							term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term2 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
+							term1 = ((rho_vec[k] - c)*m*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((ps1 - rho_vec[k])*m*Lshare(ps1) - (ps2 - rho_vec[k-1])*m*Lshare(ps2))
 							term3 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
 							res = term1 + term2*term3
 							wfocs_vec[i+N-1] = -res
 						else
-							term1 = ((rho_vec[k] - c)*M*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term2 = ((rho_vec[k-1] - c)*M*Lshare(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term3 = ((ps1 - rho_vec[k])*M*Lshare(ps1) - (ps2 - rho_vec[k-1])*M*Lshare(ps2))
+							term1 = ((rho_vec[k] - c)*m*Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((rho_vec[k-1] - c)*m*Lshare(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term3 = ((ps1 - rho_vec[k])*m*Lshare(ps1) - (ps2 - rho_vec[k-1])*m*Lshare(ps2))
 							term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
 							res = term1 + term2 + term3*term4
 							wfocs_vec[i+N-1] = -res
@@ -445,8 +445,8 @@ end
 						ps2 = Lp_star(rho_vec[k-1])
 						for j = 1:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + 2*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
-								term2 = M*((ps1 - rho_vec[k])*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k])*(Ld_pstar_d_rho(rho_vec[k]) - 1) + Lshare(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + (Ld_pstar_d_rho(rho_vec[k]) - 1)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
+								term1 = m*((rho_vec[k] - c)*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + 2*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
+								term2 = m*((ps1 - rho_vec[k])*(Ld_share(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + Ld_pstar_d_rho(rho_vec[k])^2*Ldd_share(ps1)) + Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k])*(Ld_pstar_d_rho(rho_vec[k]) - 1) + Lshare(ps1)*Ld2_pstar_d2_rho(rho_vec[k]) + (Ld_pstar_d_rho(rho_vec[k]) - 1)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]))
 								term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 								res = term1*int + term2*term3
 								whess_mat[i,j] = -res
@@ -463,14 +463,14 @@ end
 						ps2 = Lp_star(rho_vec[k-1])
 						for j = 1:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-								term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+								term1 = m*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+								term2 = m*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
 								term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
 								res = term1 + term2*term3
 								whess_mat[i,j+N-1] = -res
 							elseif j == i+1
-								term1 = M*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
-								term2 = M*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
+								term1 = m*((rho_vec[k] - c)*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+								term2 = m*((ps1 - rho_vec[k])*Ld_share(ps1)*Ld_pstar_d_rho(rho_vec[k]) + Lshare(ps1)*(Ld_pstar_d_rho(rho_vec[k]) - 1))
 								term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
 								res = term1 + term2*(-1)*term3
 								whess_mat[i,j+N-1] = -res
@@ -488,11 +488,11 @@ end
 						ps2 = Lp_star(rho_vec[k-1])
 						for j = 1:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*Lshare(ps1))
+								term1 = m*((rho_vec[k] - c)*Lshare(ps1))
 								term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
-								term3 = M*((rho_vec[k-1] - c)*Lshare(ps2))
+								term3 = m*((rho_vec[k-1] - c)*Lshare(ps2))
 								term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
-								term5 = M*((ps1 - rho_vec[k])*Lshare(ps1) - (ps2 - rho_vec[k-1])*Lshare(ps2))
+								term5 = m*((ps1 - rho_vec[k])*Lshare(ps1) - (ps2 - rho_vec[k-1])*Lshare(ps2))
 								term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
 								res = term1*term2 + term3*term4 + term5*term6
 								whess_mat[i+N-1,j+N-1] = -res
@@ -545,7 +545,7 @@ end
 			est_ff = [0.0]
 			for i in 1:N-1
 				k = i+1
-				A = est_ff[k-1] + (Lp_star(est_rhos[k]) - est_rhos[k])*Lshare(Lp_star(est_rhos[k]))*M*est_lambdas[k] - (Lp_star(est_rhos[k-1]) - est_rhos[k-1])*Lshare(Lp_star(est_rhos[k-1]))*M*est_lambdas[k]
+				A = est_ff[k-1] + (Lp_star(est_rhos[k]) - est_rhos[k])*Lshare(Lp_star(est_rhos[k]))*m*est_lambdas[k] - (Lp_star(est_rhos[k-1]) - est_rhos[k-1])*Lshare(Lp_star(est_rhos[k-1]))*m*est_lambdas[k]
 				push!(est_ff,A)
 			end
 			return (est_rhos,est_ff,est_lambdas)
@@ -553,7 +553,7 @@ end
 		
 		function price_sched_calc(params,N)
 			constrained = 1 # solving problem with A1 constrained to 0
-			#M = 1000 # normalizing as it shouldn't matter for schedule calculation. Helps numerical methods
+			m = 3000 # normalizing as it shouldn't matter for schedule calculation. Helps numerical methods apparently
 			# params are the params of the wholesaler's problem we're trying to
 			# estimate. 
 
@@ -588,7 +588,7 @@ end
 						# Pre-calculating some stuff to avoid repeated calls to p_star
 						ps1 = p_star(rho_vec[k])
 						ps2 = p_star(rho_vec[k-1])
-						inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
+						inc = ((rho_vec[k] - c)*m*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*m - (ps2 - rho_vec[k-1])*share(ps2)*m)
 						profit = profit + inc
 					end
 					return -profit
@@ -606,8 +606,8 @@ end
 						ps1 = p_star(rho_vec[k])
 						ps2 = p_star(rho_vec[k-1])
 						#rho FOC
-							term1 = ((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*int*M
-							term2 = ((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))*M
+							term1 = ((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*int*m
+							term2 = ((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))*m
 							term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 							res = term1 + term2*term3
 							wfocs_vec[i] = -res
@@ -615,9 +615,9 @@ end
 						if i == 1
 							# do nothing
 						else
-							term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term2 = ((rho_vec[k-1] - c)*M*share(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term3 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
+							term1 = ((rho_vec[k] - c)*m*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((rho_vec[k-1] - c)*m*share(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term3 = ((ps1 - rho_vec[k])*m*share(ps1) - (ps2 - rho_vec[k-1])*m*share(ps2))
 							term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
 							res = term1 + term2 + term3*term4
 							wfocs_vec[i+N-1-1] = -res
@@ -639,8 +639,8 @@ end
 						ps2 = p_star(rho_vec[k-1])
 						for j = 1:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + 2*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
-								term2 = M*((ps1 - rho_vec[k])*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + d_share(ps1)*d_pstar_d_rho(rho_vec[k])*(d_pstar_d_rho(rho_vec[k]) - 1) + share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + (d_pstar_d_rho(rho_vec[k]) - 1)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
+								term1 = m*((rho_vec[k] - c)*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + 2*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
+								term2 = m*((ps1 - rho_vec[k])*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + d_share(ps1)*d_pstar_d_rho(rho_vec[k])*(d_pstar_d_rho(rho_vec[k]) - 1) + share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + (d_pstar_d_rho(rho_vec[k]) - 1)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
 								term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 								res = term1*int + term2*term3
 								whess_mat[i,j] = -res
@@ -657,14 +657,14 @@ end
 						ps2 = p_star(rho_vec[k-1])
 						for j = 2:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-								term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+								term1 = m*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+								term2 = m*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
 								term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
 								res = term1 + term2*term3
 								whess_mat[i,j+N-1-1] = -res
 							elseif j == i+1
-								term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
-								term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+								term1 = m*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+								term2 = m*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
 								term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
 								res = term1 + term2*(-1)*term3
 								whess_mat[i,j+N-1-1] = -res
@@ -682,11 +682,11 @@ end
 						ps2 = p_star(rho_vec[k-1])
 						for j = 2:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*share(ps1))
+								term1 = m*((rho_vec[k] - c)*share(ps1))
 								term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
-								term3 = M*((rho_vec[k-1] - c)*share(ps2))
+								term3 = m*((rho_vec[k-1] - c)*share(ps2))
 								term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
-								term5 = M*((ps1 - rho_vec[k])*share(ps1) - (ps2 - rho_vec[k-1])*share(ps2))
+								term5 = m*((ps1 - rho_vec[k])*share(ps1) - (ps2 - rho_vec[k-1])*share(ps2))
 								term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
 								res = term1*term2 + term3*term4 + term5*term6
 								whess_mat[i+N-1-1,j+N-1-1] = -res
@@ -714,7 +714,7 @@ end
 						# Pre-calculating some stuff to avoid repeated calls to p_star
 						ps1 = p_star(rho_vec[k])
 						ps2 = p_star(rho_vec[k-1])
-						inc = ((rho_vec[k] - c)*M*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*M - (ps2 - rho_vec[k-1])*share(ps2)*M)
+						inc = ((rho_vec[k] - c)*m*share(ps1))*int + (1-est_cdf(lambda_vec[k]))*lambda_vec[k]*((ps1 - rho_vec[k])*share(ps1)*m - (ps2 - rho_vec[k-1])*share(ps2)*m)
 						profit = profit + inc
 					end
 					return -profit
@@ -732,22 +732,22 @@ end
 						ps1 = p_star(rho_vec[k])
 						ps2 = p_star(rho_vec[k-1])
 						#rho FOC
-							term1 = ((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*int*M
-							term2 = ((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))*M
+							term1 = ((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*int*m
+							term2 = ((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))*m
 							term3 = (1 - est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 							res = term1 + term2*term3
 							wfocs_vec[i] = -res
 						# lambda FOC
 						if i == 1
-							term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term2 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
+							term1 = ((rho_vec[k] - c)*m*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((ps1 - rho_vec[k])*m*share(ps1) - (ps2 - rho_vec[k-1])*m*share(ps2))
 							term3 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
 							res = term1 + term2*term3
 							wfocs_vec[i+N-1] = -res
 						else
-							term1 = ((rho_vec[k] - c)*M*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term2 = ((rho_vec[k-1] - c)*M*share(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
-							term3 = ((ps1 - rho_vec[k])*M*share(ps1) - (ps2 - rho_vec[k-1])*M*share(ps2))
+							term1 = ((rho_vec[k] - c)*m*share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term2 = ((rho_vec[k-1] - c)*m*share(ps2))*(lambda_vec[k]*est_pdf(lambda_vec[k]))
+							term3 = ((ps1 - rho_vec[k])*m*share(ps1) - (ps2 - rho_vec[k-1])*m*share(ps2))
 							term4 = (1 - est_cdf(lambda_vec[k]) - lambda_vec[k]*est_pdf(lambda_vec[k]))
 							res = term1 + term2 + term3*term4
 							wfocs_vec[i+N-1] = -res
@@ -769,8 +769,8 @@ end
 						ps2 = p_star(rho_vec[k-1])
 						for j = 1:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + 2*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
-								term2 = M*((ps1 - rho_vec[k])*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + d_share(ps1)*d_pstar_d_rho(rho_vec[k])*(d_pstar_d_rho(rho_vec[k]) - 1) + share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + (d_pstar_d_rho(rho_vec[k]) - 1)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
+								term1 = m*((rho_vec[k] - c)*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + 2*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
+								term2 = m*((ps1 - rho_vec[k])*(d_share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + d_pstar_d_rho(rho_vec[k])^2*dd_share(ps1)) + d_share(ps1)*d_pstar_d_rho(rho_vec[k])*(d_pstar_d_rho(rho_vec[k]) - 1) + share(ps1)*d2_pstar_d2_rho(rho_vec[k]) + (d_pstar_d_rho(rho_vec[k]) - 1)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]))
 								term3 = (1-est_cdf(lambda_vec[k]))*lambda_vec[k] - (1-est_cdf(lambda_vec[k+1]))*lambda_vec[k+1]
 								res = term1*int + term2*term3
 								whess_mat[i,j] = -res
@@ -787,14 +787,14 @@ end
 						ps2 = p_star(rho_vec[k-1])
 						for j = 1:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
-								term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+								term1 = m*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(-lambda_vec[k]*est_pdf(lambda_vec[k]))
+								term2 = m*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
 								term3 = (1-est_cdf(lambda_vec[k])) + lambda_vec[k]*(-est_pdf(lambda_vec[k]))
 								res = term1 + term2*term3
 								whess_mat[i,j+N-1] = -res
 							elseif j == i+1
-								term1 = M*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
-								term2 = M*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
+								term1 = m*((rho_vec[k] - c)*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1))*(lambda_vec[k+1]*est_pdf(lambda_vec[k+1]))
+								term2 = m*((ps1 - rho_vec[k])*d_share(ps1)*d_pstar_d_rho(rho_vec[k]) + share(ps1)*(d_pstar_d_rho(rho_vec[k]) - 1))
 								term3 = (1-est_cdf(lambda_vec[k+1])) + lambda_vec[k+1]*(-est_pdf(lambda_vec[k+1]))
 								res = term1 + term2*(-1)*term3
 								whess_mat[i,j+N-1] = -res
@@ -812,11 +812,11 @@ end
 						ps2 = p_star(rho_vec[k-1])
 						for j = 1:N-1
 							if j == i
-								term1 = M*((rho_vec[k] - c)*share(ps1))
+								term1 = m*((rho_vec[k] - c)*share(ps1))
 								term2 = (-(lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k])))
-								term3 = M*((rho_vec[k-1] - c)*share(ps2))
+								term3 = m*((rho_vec[k-1] - c)*share(ps2))
 								term4 = (lambda_vec[k]*d_est_pdf(lambda_vec[k]) + est_pdf(lambda_vec[k]))
-								term5 = M*((ps1 - rho_vec[k])*share(ps1) - (ps2 - rho_vec[k-1])*share(ps2))
+								term5 = m*((ps1 - rho_vec[k])*share(ps1) - (ps2 - rho_vec[k-1])*share(ps2))
 								term6 = -est_pdf(lambda_vec[k]) + lambda_vec[k]*(-d_est_pdf(lambda_vec[k])) + (-est_pdf(lambda_vec[k]))
 								res = term1*term2 + term3*term4 + term5*term6
 								whess_mat[i+N-1,j+N-1] = -res
@@ -867,9 +867,9 @@ end
 			innerx0 = [hs_rhos[2:end] ; hs_lambdas[3:end-1]]
 			res = Optim.optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), extended_trace=false)
 			innerx0=Optim.minimizer(res)
-			steps = (params[1] - 1.0 + 1.0)/0.1 # divide by desired step size. Could be made smaller for smoother continuation
+			steps = ceil((params[1] - 1.0 + 1.0)/0.1) # divide by desired step size. Could be made smaller for smoother continuation
 			for cont_c = linspace(1.0,params[1],steps) # continuation method since linear approx is no good with big c
-				#println([c,innerx0])
+				#println([c;innerx0])
 				c = cont_c
 				res = Optim.optimize(w_profit,wfocs!,whess!,innerx0,method=NewtonTrustRegion(), extended_trace=false)
 				innerx0=Optim.minimizer(res)
@@ -904,7 +904,7 @@ end
 		obs_lambdas = nllamb[2:end-1]
 		obs_sched = [obs_rhos ; obs_lambdas]
 		println(obs_sched)
-		=#
+		=#	
 		# Generating Deviations. Same for all params, so only do once.
 		dev_step = .20
 		dev_steps = [1.0+dev_step, 1.0, 1.0-dev_step]
@@ -972,10 +972,15 @@ end
 			grad[1] = (moment_obj_func(params[1] + eps,params[2]) - moment_obj_func(params[1] - eps,params[2]))/(2*eps)
 			grad[2] = (moment_obj_func(params[1],params[2]+eps) - moment_obj_func(params[1],params[2]-eps))/(2*eps)
 		end
-		#=	
+			
 		# grid search approach	
-		c_grid = 1:.5:100
-		b_grid = linspace(-5.0,5.0,20)
+		min_rho = minimum(obs_rhos)
+		c_grid = floor(.5*min_rho):.1:ceil(1.5*min_rho)
+		b_grid = -4:.05:4
+		println(c_grid)
+		println(b_grid)
+		cart_grid = Iterators.product(c_grid,b_grid)
+		#=
 		Q_eval = Array{Float64}(0,3)
 		for c in c_grid
 			for b in b_grid
@@ -984,26 +989,30 @@ end
 				Q_eval = [Q_eval ; res]
 			end
 		end
+		=#
+		
+		Q_eval = map((args)->moment_obj_func(args...),cart_grid)
 		csvfile = open("moment_$market"*"_$product.csv", "w")
 		write(csvfile, "c,b,Q\n")
-		writedlm(csvfile,Q_eval,',')
+		out_mat = [[y[i] for y in cart_grid, i in 1:2] Q_eval]
+		writedlm(csvfile,out_mat,',')
 		close(csvfile)
 		#min_q_ind = findin(Q_eval[:,3],minimum(Q_eval[:,3]))
-		min_q = minimum(Q_eval[:,3])
-		min_q_ind = find(Q_eval[:,3] .<= 1.10*min_q)
-		feas_c = Q_eval[min_q_ind,1]
-		feas_b = Q_eval[min_q_ind,2]
+		min_q = minimum(Q_eval)
+		min_q_ind = find(Q_eval .<= min_q+1e-4)
+		feas_c = out_mat[min_q_ind,1]
+		feas_b = out_mat[min_q_ind,2]
 		c_ub = maximum(feas_c)
 		c_lb = minimum(feas_c)
 		b_ub = maximum(feas_b)
 		b_lb = minimum(feas_b)
 		println([c_lb,c_ub,b_lb,b_ub])
-		=#	
-
-		# finding xi param (cost of additional segment)
+			
 		
-		mid_c = 20.0 # (c_lb + c_ub)/2.0
-		mid_b = 2.894736842 #(b_lb + b_ub)/2.0
+		# finding xi param (cost of additional segment)
+		println(M)	
+		mid_c = (c_lb + c_ub)/2.0
+		mid_b = (b_lb + b_ub)/2.0
 		println([mid_c,mid_b])
 		eq_ps = price_sched_calc([mid_c,mid_b], obs_N)
 		println(eq_ps)
@@ -1012,6 +1021,7 @@ end
 		less_ps = price_sched_calc([mid_c,mid_b],obs_N-1)
 		println(less_ps)
 		
+		println(M)	
 		less_rho = less_ps[1]
 		less_ff = less_ps[2]
 		less_lambda = less_ps[3]
@@ -1109,8 +1119,8 @@ end
 
 		lrp(x) = rprofit(lin_rho[2],x,lin_ff[2])
 		lin_rprofit = sparse_int(lrp,lin_lambda[2],lin_lambda[3])
-		
-		
+	
+			
 		Δw_profit = ((lin_wprofit-2*mid_xi) - (eq_wprofit - obs_N*mid_xi))/(eq_wprofit - obs_N*mid_xi)
 		Δr_profit = (lin_rprofit - eq_rprofit)/(eq_rprofit)
 		Δc_surp = (lin_csurp - eq_csurp)/(eq_csurp)
@@ -1134,9 +1144,9 @@ for market in markets
 	#products = levels(df[df[:mkt] .== market, :product])
 	products = [350]
 	for product in products
-		m = convert(Int,market)
-		p = convert(Int,product)
-		push!(tups,(m,p))
+		mkt = convert(Int,market)
+		pd = convert(Int,product)
+		push!(tups,(mkt,pd))
 	end
 end
 
